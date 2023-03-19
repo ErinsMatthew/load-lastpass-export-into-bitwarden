@@ -34,49 +34,6 @@ EOT
     exit
 }
 
-# {
-#   "folders": [
-#     {
-#       "id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-#       "name": "Folder Name"
-#     },
-#     ...
-#   ],
-#   "items": [
-#     {
-#     "id": "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy",
-#     "organizationId": null,
-#     "folderId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-#     "type": 1,
-#     "reprompt": 0,
-#     "name": "My Gmail Login",
-#     "notes": "This is my gmail login for import.",
-#     "favorite": false,
-#     "fields": [
-#         {
-#           "name": "custom-field-1",
-#           "value": "custom-field-value",
-#           "type": 0
-#         },
-#         ...
-#       ],
-#       "login": {
-#         "uris": [
-#           {
-#             "match": null,
-#             "uri": "https://mail.google.com"
-#           }
-#         ],
-#         "username": "myaccount@gmail.com",
-#         "password": "myaccountpassword",
-#         "totp": otpauth://totp/my-secret-key
-#       },
-#       "collectionIds": null
-#     },
-#     ...
-#   ]
-# }
-
 initGlobals() {
     declare -gA GLOBALS=(
         [BE_QUIET]='false'              # -q
@@ -91,7 +48,7 @@ initGlobals() {
     )
 
     declare -ga ITEM_ARRAY=()
-    declare -gA FOLDERS=()
+    declare -gA FOLDERS_HASH=()
 }
 
 debug() {
@@ -223,7 +180,7 @@ checkForDependency() {
 dependencyCheck() {
     local DEPENDENCY
 
-    for DEPENDENCY in cat find realpath xargs; do
+    for DEPENDENCY in cat find jq realpath xargs; do
         checkForDependency "${DEPENDENCY}"
     done
 
@@ -246,17 +203,18 @@ decryptData() {
 loadFolderName() {
     local FOLDER_NAME
 
-    FOLDER_NAME=$(echo "$1" | jq -r '.[0].group')
+    FOLDER_NAME=$(echo "$1" | jq --raw-output '.group')
 
-    if [[ -n ${FOLDER_NAME} ]]; then
-        FOLDERS[${FOLDER_NAME}]=''
+    # if folder name is specified and does not exist as a key, add it
+    if [[ -n ${FOLDER_NAME} && -z ${FOLDERS_HASH[${FOLDER_NAME}]+_} ]]; then
+        debug "Adding folder '${FOLDER_NAME}'."
+
+        FOLDERS_HASH[${FOLDER_NAME}]=''
     fi
 }
 
 processItem() {
-    debug "Processing item '$1'."
-
-    echo "$1" | jq -c '.[0]'
+    echo "$1"
 }
 
 showProgress() {
@@ -297,7 +255,7 @@ convertAllItems() {
         COUNTER=0
 
         for FILE in "${FILE_LIST[@]}"; do
-            ITEM_JSON=$(decryptData "${FILE}")
+            ITEM_JSON=$(decryptData "${FILE}" | jq --compact-output '.[0]')
 
             loadFolderName "${ITEM_JSON}"
 
@@ -312,14 +270,55 @@ convertAllItems() {
     fi
 }
 
+#   "items": [
+#     {
+#     "id": "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy",
+#     "organizationId": null,
+#     "folderId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+#     "type": 1,
+#     "reprompt": 0,
+#     "name": "My Gmail Login",
+#     "notes": "This is my gmail login for import.",
+#     "favorite": false,
+#     "fields": [
+#         {
+#           "name": "custom-field-1",
+#           "value": "custom-field-value",
+#           "type": 0
+#         },
+#         ...
+#       ],
+#       "login": {
+#         "uris": [
+#           {
+#             "match": null,
+#             "uri": "https://mail.google.com"
+#           }
+#         ],
+#         "username": "myaccount@gmail.com",
+#         "password": "myaccountpassword",
+#         "totp": otpauth://totp/my-secret-key
+#       },
+#       "collectionIds": null
+#     },
+#     ...
+#   ]
+
 buildBitwardenJson() {
     local FOLDER_ARRAY
+    local FOLDERS_JSON
+    local ITEMS_JSON
 
     debug "Building Bitwarden JSON."
 
-    FOLDER_ARRAY=( "${!FOLDERS[@]}" )
+    # convert folder hash keys to array
+    FOLDER_ARRAY=( "${!FOLDERS_HASH[@]}" )
 
-    echo "${FOLDER_ARRAY[@]@Q}"
+    FOLDERS_JSON=$(jq --null-input '{ "folders": ( $ARGS.positional | map( { "name": . } ) ) }' --args "${FOLDER_ARRAY[@]}")
+
+    ITEMS_JSON=$(jq --null-input '{ "items": $ARGS.positional }' --args "${ITEM_ARRAY[@]}")
+
+    echo "${FOLDERS_JSON}" "${ITEMS_JSON}" | jq --monochrome-output --slurp 'reduce .[] as $item ( {}; . * $item )'
 }
 
 convertLastPassExport() {

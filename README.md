@@ -27,6 +27,7 @@ $ convert.sh -d -p passphrase.txt /tmp/lpass
 - `cat` - pre-installed with macOS and most Linux distributions
 - `find` - pre-installed with macOS and most Linux distributions
 - `gpg` - optional; GNU Privacy Guard; install using [Homebrew](https://formulae.brew.sh/formula/gnupg), another package manager, or [manually](https://gnupg.org/).
+- `jq` - install via coreutils using [Homebrew](https://formulae.brew.sh/formula/jq), another package manager, or [manually](https://stedolan.github.io/jq/).
 - `realpath` - install via coreutils using [Homebrew](https://formulae.brew.sh/formula/coreutils), another package manager, or [manually](https://www.gnu.org/software/coreutils/).
 - `xargs` - pre-installed with macOS and most Linux distributions
 
