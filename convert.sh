@@ -47,7 +47,7 @@ initGlobals() {
         [PASSPHRASE_FILE]=''            # -p
     )
 
-    declare -ga ITEM_ARRAY=()
+    declare -ga ITEMS_ARRAY=()
     declare -gA FOLDERS_HASH=()
 }
 
@@ -213,6 +213,40 @@ loadFolderName() {
     fi
 }
 
+#   "items": [
+#     {
+#     "id": "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy",
+#     "organizationId": null,
+#     "folderId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+#     "type": 1,
+#     "reprompt": 0,
+#     "name": "My Gmail Login",
+#     "notes": "This is my gmail login for import.",
+#     "favorite": false,
+#     "fields": [
+#         {
+#           "name": "custom-field-1",
+#           "value": "custom-field-value",
+#           "type": 0
+#         },
+#         ...
+#       ],
+#       "login": {
+#         "uris": [
+#           {
+#             "match": null,
+#             "uri": "https://mail.google.com"
+#           }
+#         ],
+#         "username": "myaccount@gmail.com",
+#         "password": "myaccountpassword",
+#         "totp": otpauth://totp/my-secret-key
+#       },
+#       "collectionIds": null
+#     },
+#     ...
+#   ]
+
 processItem() {
     echo "$1"
 }
@@ -259,7 +293,7 @@ convertAllItems() {
 
             loadFolderName "${ITEM_JSON}"
 
-            ITEM_ARRAY+=( "$(processItem "${ITEM_JSON}")" )
+            ITEMS_ARRAY+=( "$(processItem "${ITEM_JSON}")" )
 
             (( COUNTER++ ))
 
@@ -270,53 +304,19 @@ convertAllItems() {
     fi
 }
 
-#   "items": [
-#     {
-#     "id": "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy",
-#     "organizationId": null,
-#     "folderId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-#     "type": 1,
-#     "reprompt": 0,
-#     "name": "My Gmail Login",
-#     "notes": "This is my gmail login for import.",
-#     "favorite": false,
-#     "fields": [
-#         {
-#           "name": "custom-field-1",
-#           "value": "custom-field-value",
-#           "type": 0
-#         },
-#         ...
-#       ],
-#       "login": {
-#         "uris": [
-#           {
-#             "match": null,
-#             "uri": "https://mail.google.com"
-#           }
-#         ],
-#         "username": "myaccount@gmail.com",
-#         "password": "myaccountpassword",
-#         "totp": otpauth://totp/my-secret-key
-#       },
-#       "collectionIds": null
-#     },
-#     ...
-#   ]
-
 buildBitwardenJson() {
-    local FOLDER_ARRAY
+    local FOLDERS_ARRAY
     local FOLDERS_JSON
     local ITEMS_JSON
 
     debug "Building Bitwarden JSON."
 
-    # convert folder hash keys to array
-    FOLDER_ARRAY=( "${!FOLDERS_HASH[@]}" )
+    # convert keys of folders hash to array
+    FOLDERS_ARRAY=( "${!FOLDERS_HASH[@]}" )
 
-    FOLDERS_JSON=$(jq --null-input '{ "folders": ( $ARGS.positional | map( { "name": . } ) ) }' --args "${FOLDER_ARRAY[@]}")
+    FOLDERS_JSON=$(jq --null-input '{ "folders": ( $ARGS.positional | map( { "name": . } ) ) }' --args "${FOLDERS_ARRAY[@]}")
 
-    ITEMS_JSON=$(jq --null-input '{ "items": $ARGS.positional }' --args "${ITEM_ARRAY[@]}")
+    ITEMS_JSON=$(jq --null-input '{ "items": $ARGS.positional }' --args "${ITEMS_ARRAY[@]}")
 
     echo "${FOLDERS_JSON}" "${ITEMS_JSON}" | jq --monochrome-output --slurp 'reduce .[] as $item ( {}; . * $item )'
 }
