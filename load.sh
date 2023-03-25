@@ -7,7 +7,7 @@ shopt -s extglob
 
 usage() {
     cat << EOT 1>&2
-Usage: convert.sh [-dfhq] [-a algo] [-o org] [-p fn] [-x ext] dir
+Usage: load.sh [-dfhq] [-a algo] [-o org] [-p fn] [-x ext] dir
 
 OPTIONS
 =======
@@ -26,8 +26,8 @@ dir          directory to write output files
 
 EXAMPLES
 ========
-# convert encrypted LastPass items in /tmp/lpass directory to Bitwarden JSON format
-$ convert.sh -d -p passphrase.txt /tmp/lpass
+# load encrypted LastPass items in /tmp/lpass directory into Bitwarden
+$ load.sh -d -p passphrase.txt /tmp/lpass
 
 EOT
 
@@ -264,14 +264,14 @@ performSetup() {
     loadFolderHash
 }
 
-convertAllItems() {
+processLastPassExport() {
     local FILE_LIST
     local NUM_ITEMS
     local COUNTER
     local FILE
     local ITEM_JSON
 
-    debug "Converting exported LastPass items to Bitwarden JSON."
+    debug "Loading exported LastPass items into Bitwarden."
 
     # build array of file names in input directory
     mapfile -d '' FILE_LIST < <(find "${GLOBALS[INPUT_DIR]}" -type f -depth 1 -print0 | xargs -0 realpath -z)
@@ -299,12 +299,6 @@ convertAllItems() {
     fi
 }
 
-convertLastPassExport() {
-    convertAllItems
-
-    buildBitwardenJson
-}
-
 performSetup "$@"
 
-convertLastPassExport
+processLastPassExport
