@@ -47,7 +47,6 @@ initGlobals() {
         [PASSPHRASE_FILE]=''            # -p
     )
 
-    declare -ga ITEMS_ARRAY=()
     declare -gA FOLDERS_HASH=()
 }
 
@@ -180,7 +179,7 @@ checkForDependency() {
 dependencyCheck() {
     local DEPENDENCY
 
-    for DEPENDENCY in cat find jq realpath xargs; do
+    for DEPENDENCY in cat echo find jq realpath xargs; do
         checkForDependency "${DEPENDENCY}"
     done
 
@@ -200,52 +199,46 @@ decryptData() {
     fi
 }
 
-loadFolderName() {
+loadFolderHash() {
+    local FOLDER_JSON
+    local FOLDER_ID
     local FOLDER_NAME
 
-    FOLDER_NAME=$(echo "$1" | jq --raw-output '.group')
+    while read -r FOLDER_JSON; do
+        FOLDER_ID=$(printf '%s' "${FOLDER_JSON}" | jq --raw-output '.id')
+        FOLDER_NAME=$(printf '%s' "${FOLDER_JSON}" | jq --raw-output '.name')
+
+        # if folder name is specified and does not exist as a key, add it
+        if [[ -z ${FOLDERS_HASH[${FOLDER_NAME}]+_} ]]; then
+            debug "Adding folder '${FOLDER_NAME}' (ID: '${FOLDER_ID}')."
+
+            FOLDERS_HASH[${FOLDER_NAME}]=${FOLDER_ID}
+        else
+            debug "Found a duplicate folder '${FOLDER_NAME}' (ID: '${FOLDER_ID}')."
+        fi
+    done < <(bw list folders | jq --compact-output '.[]')
+}
+
+createFolder() {
+    local FOLDER_NAME
+    local FOLDER_ID
+
+    FOLDER_NAME=$1
+    FOLDER_ID=$(printf '{"name": "%s"}' "${FOLDER_NAME}" | bw encode | bw create folder | jq --raw-output '.id')
+
+    FOLDERS_HASH[${FOLDER_NAME}]=${FOLDER_ID}
+}
+
+checkFolder() {
+    local FOLDER_NAME
+
+    FOLDER_NAME=$(printf '%s' "$1" | jq --raw-output '.group')
 
     # if folder name is specified and does not exist as a key, add it
     if [[ -n ${FOLDER_NAME} && -z ${FOLDERS_HASH[${FOLDER_NAME}]+_} ]]; then
-        debug "Adding folder '${FOLDER_NAME}'."
-
-        FOLDERS_HASH[${FOLDER_NAME}]=''
+        createFolder "${FOLDER_NAME}"
     fi
 }
-
-#   "items": [
-#     {
-#     "id": "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy",
-#     "organizationId": null,
-#     "folderId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-#     "type": 1,
-#     "reprompt": 0,
-#     "name": "My Gmail Login",
-#     "notes": "This is my gmail login for import.",
-#     "favorite": false,
-#     "fields": [
-#         {
-#           "name": "custom-field-1",
-#           "value": "custom-field-value",
-#           "type": 0
-#         },
-#         ...
-#       ],
-#       "login": {
-#         "uris": [
-#           {
-#             "match": null,
-#             "uri": "https://mail.google.com"
-#           }
-#         ],
-#         "username": "myaccount@gmail.com",
-#         "password": "myaccountpassword",
-#         "totp": otpauth://totp/my-secret-key
-#       },
-#       "collectionIds": null
-#     },
-#     ...
-#   ]
 
 processItem() {
     echo "$1"
@@ -267,6 +260,8 @@ performSetup() {
     setDefaults
 
     dependencyCheck
+
+    loadFolderHash
 }
 
 convertAllItems() {
@@ -278,7 +273,7 @@ convertAllItems() {
 
     debug "Converting exported LastPass items to Bitwarden JSON."
 
-    # build array of files
+    # build array of file names in input directory
     mapfile -d '' FILE_LIST < <(find "${GLOBALS[INPUT_DIR]}" -type f -depth 1 -print0 | xargs -0 realpath -z)
 
     NUM_ITEMS=${#FILE_LIST[@]}
@@ -291,9 +286,9 @@ convertAllItems() {
         for FILE in "${FILE_LIST[@]}"; do
             ITEM_JSON=$(decryptData "${FILE}" | jq --compact-output '.[0]')
 
-            loadFolderName "${ITEM_JSON}"
+            checkFolder "${ITEM_JSON}"
 
-            ITEMS_ARRAY+=( "$(processItem "${ITEM_JSON}")" )
+            # ITEMS_ARRAY+=( "$(processItem "${ITEM_JSON}")" )
 
             (( COUNTER++ ))
 
@@ -302,23 +297,6 @@ convertAllItems() {
     else
         debug "No items found in '${GLOBALS[INPUT_DIR]}'."
     fi
-}
-
-buildBitwardenJson() {
-    local FOLDERS_ARRAY
-    local FOLDERS_JSON
-    local ITEMS_JSON
-
-    debug "Building Bitwarden JSON."
-
-    # convert keys of folders hash to array
-    FOLDERS_ARRAY=( "${!FOLDERS_HASH[@]}" )
-
-    FOLDERS_JSON=$(jq --null-input '{ "folders": ( $ARGS.positional | map( { "name": . } ) ) }' --args "${FOLDERS_ARRAY[@]}")
-
-    ITEMS_JSON=$(jq --null-input '{ "items": $ARGS.positional }' --args "${ITEMS_ARRAY[@]}")
-
-    echo "${FOLDERS_JSON}" "${ITEMS_JSON}" | jq --monochrome-output --slurp 'reduce .[] as $item ( {}; . * $item )'
 }
 
 convertLastPassExport() {
