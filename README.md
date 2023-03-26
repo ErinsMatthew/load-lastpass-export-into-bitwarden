@@ -26,9 +26,11 @@ $ load.sh -d -p passphrase.txt /tmp/lpass
 
 - `bw` - Bitwarden CLI; install using [Homebrew](https://formulae.brew.sh/formula/bitwarden-cli), another package manager, or [manually](https://bitwarden.com/help/cli/).
 - `cat` - pre-installed with macOS and most Linux distributions.
+- `cut` - pre-installed with macOS and most Linux distributions.
 - `echo` - pre-installed with macOS and most Linux distributions.
 - `find` - pre-installed with macOS and most Linux distributions.
 - `gpg` - optional; GNU Privacy Guard; install using [Homebrew](https://formulae.brew.sh/formula/gnupg), another package manager, or [manually](https://gnupg.org/).
+- `grep` - pre-installed with macOS and most Linux distributions.
 - `jq` - install via coreutils using [Homebrew](https://formulae.brew.sh/formula/jq), another package manager, or [manually](https://stedolan.github.io/jq/).
 - `realpath` - install via coreutils using [Homebrew](https://formulae.brew.sh/formula/coreutils), another package manager, or [manually](https://www.gnu.org/software/coreutils/).
 - `xargs` - pre-installed with macOS and most Linux distributions.
