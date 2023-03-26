@@ -48,6 +48,8 @@ initGlobals() {
     )
 
     declare -gA FOLDERS_HASH=()
+
+    declare -gA TEMPLATES=()
 }
 
 debug() {
@@ -179,7 +181,7 @@ checkForDependency() {
 dependencyCheck() {
     local DEPENDENCY
 
-    for DEPENDENCY in cat echo find jq realpath xargs; do
+    for DEPENDENCY in bw cat cut echo find grep jq realpath xargs; do
         checkForDependency "${DEPENDENCY}"
     done
 
@@ -199,14 +201,28 @@ decryptData() {
     fi
 }
 
+getItemProperty() {
+    printf '%s' "$1" | jq --raw-output "$2"
+}
+
+loadTemplates() {
+    TEMPLATES[CARD]=$(bw get template item.card)
+    TEMPLATES[FIELD]=$(bw get template item.field)
+    TEMPLATES[IDENTITY]=$(bw get template item.identity)
+    TEMPLATES[ITEM]=$(bw get template item)
+    TEMPLATES[LOGIN]=$(bw get template item.login | jq '.totp = null')
+    TEMPLATES[NOTE]=$(bw get template item.secureNote)
+    TEMPLATES[URI]=$(bw get template item.login.uri)
+}
+
 loadFolderHash() {
     local FOLDER_JSON
     local FOLDER_ID
     local FOLDER_NAME
 
     while read -r FOLDER_JSON; do
-        FOLDER_ID=$(printf '%s' "${FOLDER_JSON}" | jq --raw-output '.id')
-        FOLDER_NAME=$(printf '%s' "${FOLDER_JSON}" | jq --raw-output '.name')
+        FOLDER_ID=$(getItemProperty "${FOLDER_JSON}" '.id')
+        FOLDER_NAME=$(getItemProperty "${FOLDER_JSON}" '.name')
 
         # if folder name is specified and does not exist as a key, add it
         if [[ -z ${FOLDERS_HASH[${FOLDER_NAME}]+_} ]]; then
@@ -224,7 +240,9 @@ createFolder() {
     local FOLDER_ID
 
     FOLDER_NAME=$1
-    FOLDER_ID=$(printf '{"name": "%s"}' "${FOLDER_NAME}" | bw encode | bw create folder | jq --raw-output '.id')
+    FOLDER_ID=$(printf '%s' "${TEMPLATES[FOLDER]}" | jq ".name = ${FOLDER_NAME/"/\\"/}" | bw encode | bw create folder | jq --raw-output '.id')
+
+    debug "Created folder '${FOLDER_NAME}' (ID: '${FOLDER_ID}')."
 
     FOLDERS_HASH[${FOLDER_NAME}]=${FOLDER_ID}
 }
@@ -232,7 +250,7 @@ createFolder() {
 checkFolder() {
     local FOLDER_NAME
 
-    FOLDER_NAME=$(printf '%s' "$1" | jq --raw-output '.group')
+    FOLDER_NAME=$(getItemProperty "$1" '.group')
 
     # if folder name is specified and does not exist as a key, add it
     if [[ -n ${FOLDER_NAME} && -z ${FOLDERS_HASH[${FOLDER_NAME}]+_} ]]; then
@@ -240,8 +258,159 @@ checkFolder() {
     fi
 }
 
+getItemType() {
+    local ITEM_JSON
+    local ITEM_URL
+    local ITEM_TYPE
+
+    ITEM_JSON=$1
+
+    ITEM_URL=$(getItemProperty "${ITEM_JSON}" '.url')
+
+    if [[ ${ITEM_URL} == 'http://sn' ]]; then
+        ITEM_TYPE=$(getItemProperty "${ITEM_JSON}" '.note' | grep NoteType | cut -d : -f 2)
+
+        if [[ -z ${ITEM_TYPE} ]]; then
+            ITEM_TYPE='Secure Note'
+        fi
+
+        echo "${ITEM_TYPE}"
+    else
+        echo 'Password'
+    fi
+}
+
+addAttachments() {
+    debug "Adding attachments."
+}
+
+# Adapted from <https://stackoverflow.com/a/17841619/2647496>.
+joinArray() {
+    local DELIM
+    local ARRAY
+
+    DELIM=${1-}
+    ARRAY=${2-}
+
+    if shift 2; then
+        printf '%s' "${ARRAY}" "${@/#/${DELIM}}"
+    fi
+}
+
 processItem() {
-    echo "$1"
+    local ITEM_JSON
+    local ITEM_ID
+    local ITEM_TYPE
+    local ITEM_TYPE_CODE
+    local JQ_FILTERS
+    local JQ_FILTERS_STRING
+
+    ITEM_JSON=$(decryptData "$1" | jq --compact-output '.[0]')
+
+    checkFolder "${ITEM_JSON}"
+
+    ITEM_ID=$(getItemProperty "${ITEM_JSON}" '.id')
+
+    ITEM_TYPE=$(getItemType "${ITEM_JSON}")
+
+    # "username": "",
+    # "password": "",
+    # "url": "http://sn",
+    # "note": "..."
+
+    # Login .type=1
+    # Secure note .type=2
+    # Card .type=3
+    # Identity .type=4
+
+    # https://bitwarden.com/help/cli/#create
+
+    debug "Processing item (ID: '${ITEM_ID}') of type '${ITEM_TYPE}'."
+
+    declare -a JQ_FILTERS=()
+
+    ITEM_NOTES=$(getItemProperty "${ITEM_JSON}" '.note')
+
+    case "${ITEM_TYPE}" in
+        'Address')
+            ITEM_TYPE_CODE=4
+            ;;
+
+        'Bank Account')
+            ITEM_TYPE_CODE=3
+            ;;
+
+        'Credit Card')
+            ITEM_TYPE_CODE=3
+            ;;
+
+        "Driver's License")
+            ITEM_TYPE_CODE=4
+            ;;
+
+        'Email Account')
+            ITEM_TYPE_CODE=1
+            ;;
+
+        'Health Insurance')
+            ITEM_TYPE_CODE=2
+            ;;
+
+        'Insurance')
+            ITEM_TYPE_CODE=1
+            ;;
+
+        'Membership')
+            ITEM_TYPE_CODE=1
+            ;;
+
+        'Passport')
+            ITEM_TYPE_CODE=1
+            ;;
+
+        'Social Security')
+            ITEM_TYPE_CODE=1
+            ;;
+
+        'Password')
+            ITEM_TYPE_CODE=1
+
+            JQ_FILTERS+=(".notes = \"${ITEM_NOTES/"/\\"/}\"")
+            ;;
+
+        'Secure Note')
+            ITEM_TYPE_CODE=2
+
+            JQ_FILTERS+=(".notes = \"${ITEM_NOTES/"/\\"/}\"")
+            ;;
+
+        *)
+            debug "Unknown item type."
+            ;;
+    esac
+
+    JQ_FILTERS+=(".type = ${ITEM_TYPE_CODE}")
+
+    ITEM_FOLDER_NAME=$(getItemProperty "${ITEM_JSON}" '.group')
+
+    if [[ -n ${ITEM_FOLDER_NAME} ]]; then
+        JQ_FILTERS+=(".folderId = \"${FOLDERS_HASH[${ITEM_FOLDER_NAME}]}\"")
+    fi
+
+    ITEM_NAME=$(getItemProperty "${ITEM_JSON}" '.name')
+
+    JQ_FILTERS+=(".name = \"${ITEM_NAME/"/\\"/}\"")
+
+    # JQ_FILTERS+=(".fields += lastpass_id=''")
+
+    JQ_FILTERS_STRING=$(joinArray ' | ' "${JQ_FILTERS[@]}")
+
+    printf '%s' "${TEMPLATES[ITEM]}" | \
+      jq --monochrome-output "${JQ_FILTERS_STRING}" # | \
+      #bw encode | \
+      #bw create item
+
+    # attachments
 }
 
 showProgress() {
@@ -261,6 +430,8 @@ performSetup() {
 
     dependencyCheck
 
+    loadTemplates
+
     loadFolderHash
 }
 
@@ -269,7 +440,6 @@ processLastPassExport() {
     local NUM_ITEMS
     local COUNTER
     local FILE
-    local ITEM_JSON
 
     debug "Loading exported LastPass items into Bitwarden."
 
@@ -284,11 +454,7 @@ processLastPassExport() {
         COUNTER=0
 
         for FILE in "${FILE_LIST[@]}"; do
-            ITEM_JSON=$(decryptData "${FILE}" | jq --compact-output '.[0]')
-
-            checkFolder "${ITEM_JSON}"
-
-            # ITEMS_ARRAY+=( "$(processItem "${ITEM_JSON}")" )
+            processItem "${FILE}"
 
             (( COUNTER++ ))
 
