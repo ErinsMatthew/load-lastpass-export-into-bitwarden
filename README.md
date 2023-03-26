@@ -33,6 +33,7 @@ $ load.sh -d -p passphrase.txt /tmp/lpass
 - `grep` - pre-installed with macOS and most Linux distributions.
 - `jq` - install via coreutils using [Homebrew](https://formulae.brew.sh/formula/jq), another package manager, or [manually](https://stedolan.github.io/jq/).
 - `realpath` - install via coreutils using [Homebrew](https://formulae.brew.sh/formula/coreutils), another package manager, or [manually](https://www.gnu.org/software/coreutils/).
+- `tr` - pre-installed with macOS and most Linux distributions.
 - `xargs` - pre-installed with macOS and most Linux distributions.
 
 ## Platform Support

@@ -181,7 +181,7 @@ checkForDependency() {
 dependencyCheck() {
     local DEPENDENCY
 
-    for DEPENDENCY in bw cat cut echo find grep jq realpath xargs; do
+    for DEPENDENCY in bw cat cut echo find grep jq realpath tr xargs; do
         checkForDependency "${DEPENDENCY}"
     done
 
@@ -208,6 +208,7 @@ getItemProperty() {
 loadTemplates() {
     TEMPLATES[CARD]=$(bw get template item.card)
     TEMPLATES[FIELD]=$(bw get template item.field)
+    TEMPLATES[FOLDER]=$(bw get template folder)
     TEMPLATES[IDENTITY]=$(bw get template item.identity)
     TEMPLATES[ITEM]=$(bw get template item)
     TEMPLATES[LOGIN]=$(bw get template item.login | jq '.totp = null')
@@ -240,7 +241,7 @@ createFolder() {
     local FOLDER_ID
 
     FOLDER_NAME=$1
-    FOLDER_ID=$(printf '%s' "${TEMPLATES[FOLDER]}" | jq ".name = ${FOLDER_NAME/"/\\"/}" | bw encode | bw create folder | jq --raw-output '.id')
+    FOLDER_ID=$(printf '%s' "${TEMPLATES[FOLDER]}" | jq ".name = \"${FOLDER_NAME/"/\\"/}\"" | bw encode | bw create folder | jq --raw-output '.id')
 
     debug "Created folder '${FOLDER_NAME}' (ID: '${FOLDER_ID}')."
 
@@ -258,6 +259,12 @@ checkFolder() {
     fi
 }
 
+getNoteField() {
+    getItemProperty "$1" '.note' | grep "^$2:" | cut -d : -f 2
+
+    # TODO: escape quotes?
+}
+
 getItemType() {
     local ITEM_JSON
     local ITEM_URL
@@ -268,7 +275,7 @@ getItemType() {
     ITEM_URL=$(getItemProperty "${ITEM_JSON}" '.url')
 
     if [[ ${ITEM_URL} == 'http://sn' ]]; then
-        ITEM_TYPE=$(getItemProperty "${ITEM_JSON}" '.note' | grep NoteType | cut -d : -f 2)
+        ITEM_TYPE=$(getNoteField "${ITEM_JSON}" 'NoteType')
 
         if [[ -z ${ITEM_TYPE} ]]; then
             ITEM_TYPE='Secure Note'
@@ -301,9 +308,18 @@ processItem() {
     local ITEM_JSON
     local ITEM_ID
     local ITEM_TYPE
-    local ITEM_TYPE_CODE
+    local SUB_FILTERS
+    local SUB_FILTERS_STRING
     local JQ_FILTERS
     local JQ_FILTERS_STRING
+    local ITEM_NOTES
+    local ITEM_TYPE_CODE
+    local ITEM_URL
+    local ITEM_USERNAME
+    local ITEM_PASSWORD
+    local URIS
+    local LOGIN
+    local LASTPASS_ID_FIELD
 
     ITEM_JSON=$(decryptData "$1" | jq --compact-output '.[0]')
 
@@ -313,81 +329,78 @@ processItem() {
 
     ITEM_TYPE=$(getItemType "${ITEM_JSON}")
 
-    # "username": "",
-    # "password": "",
-    # "url": "http://sn",
-    # "note": "..."
-
-    # Login .type=1
-    # Secure note .type=2
-    # Card .type=3
-    # Identity .type=4
-
     # https://bitwarden.com/help/cli/#create
 
     debug "Processing item (ID: '${ITEM_ID}') of type '${ITEM_TYPE}'."
 
+    declare -a SUB_FILTERS=()
     declare -a JQ_FILTERS=()
 
     ITEM_NOTES=$(getItemProperty "${ITEM_JSON}" '.note')
 
     case "${ITEM_TYPE}" in
-        'Address')
-            ITEM_TYPE_CODE=4
+        'Address' | "Driver's License")
+            ITEM_TYPE_CODE=4    # Identity
             ;;
 
-        'Bank Account')
-            ITEM_TYPE_CODE=3
+        'Bank Account' | 'Credit Card')
+            ITEM_TYPE_CODE=3    # Card
+
+            SUB_FILTERS=()
+            SUB_FILTERS+=(".cardholderName = \"$(getNoteField "${ITEM_JSON}" 'Name on Card')\"")
+            SUB_FILTERS+=(".brand = \"$(getNoteField "${ITEM_JSON}" 'Type' | tr '[:upper:]' '[:lower:]')\"")
+            SUB_FILTERS+=(".number = \"$(getNoteField "${ITEM_JSON}" 'Number')\"")
+            SUB_FILTERS+=(".expMonth = \"$(getNoteField "${ITEM_JSON}" 'Expiration Date')\"")
+            SUB_FILTERS+=(".expYear = \"$(getNoteField "${ITEM_JSON}" 'Expiration Date')\"")
+            SUB_FILTERS+=(".code = \"$(getNoteField "${ITEM_JSON}" 'Security Code')\"")
+
+            SUB_FILTERS_STRING=$(joinArray ' | ' "${SUB_FILTERS[@]}")
+
+            JQ_FILTERS+=(".card = $(printf '%s' "${TEMPLATES[CARD]}" | \
+              jq --monochrome-output "${SUB_FILTERS_STRING}")")
+
+            # TODO: Clear notes except for Notes:.*
             ;;
 
-        'Credit Card')
-            ITEM_TYPE_CODE=3
-            ;;
+        'Email Account' | 'Insurance' | \
+        'Passport' | 'Social Security' | 'Membership')
+            ITEM_TYPE_CODE=1    # Login
 
-        "Driver's License")
-            ITEM_TYPE_CODE=4
-            ;;
-
-        'Email Account')
-            ITEM_TYPE_CODE=1
-            ;;
-
-        'Health Insurance')
-            ITEM_TYPE_CODE=2
-            ;;
-
-        'Insurance')
-            ITEM_TYPE_CODE=1
-            ;;
-
-        'Membership')
-            ITEM_TYPE_CODE=1
-            ;;
-
-        'Passport')
-            ITEM_TYPE_CODE=1
-            ;;
-
-        'Social Security')
-            ITEM_TYPE_CODE=1
+            # NoteType:Membership\nLanguage:en-US\nOrganization:American          +++Taekwondo Association\nMembership Number:1610-31904\nMember Name:            +++Tristan Foster\nStart Date:,,\nExpiration Date:October,6,2021\nWebsite:      +++https://www.atamartialarts.com/\nTelephone:\nPassword:\nNotes:3746
             ;;
 
         'Password')
-            ITEM_TYPE_CODE=1
+            ITEM_TYPE_CODE=1    # Login
 
-            JQ_FILTERS+=(".notes = \"${ITEM_NOTES/"/\\"/}\"")
+            ITEM_URL=$(getItemProperty "${ITEM_JSON}" '.url')
+            ITEM_USERNAME=$(getItemProperty "${ITEM_JSON}" '.username')
+            ITEM_PASSWORD=$(getItemProperty "${ITEM_JSON}" '.password')
+
+            URIS=$(printf '%s' "${TEMPLATES[URI]}" | jq ".uri = \"${ITEM_URL/"/\\"/}\"")
+
+            SUB_FILTERS=()
+            SUB_FILTERS+=(".username = \"${ITEM_USERNAME/"/\\"/}\"")
+            SUB_FILTERS+=(".password = \"${ITEM_PASSWORD/"/\\"/}\"")
+            SUB_FILTERS+=(".uris = ${URIS}")
+
+            SUB_FILTERS_STRING=$(joinArray ' | ' "${SUB_FILTERS[@]}")
+
+            LOGIN=$(printf '%s' "${TEMPLATES[LOGIN]}" | \
+              jq --monochrome-output "${SUB_FILTERS_STRING}")
+
+            JQ_FILTERS+=(".login = ${LOGIN}")
             ;;
 
-        'Secure Note')
-            ITEM_TYPE_CODE=2
-
-            JQ_FILTERS+=(".notes = \"${ITEM_NOTES/"/\\"/}\"")
+        'Health Insurance' | 'Secure Note')
+            ITEM_TYPE_CODE=2    # Secure Note
             ;;
 
         *)
             debug "Unknown item type."
             ;;
     esac
+
+    JQ_FILTERS+=(".notes = \"${ITEM_NOTES/"/\\"/}\"")
 
     JQ_FILTERS+=(".type = ${ITEM_TYPE_CODE}")
 
@@ -401,7 +414,10 @@ processItem() {
 
     JQ_FILTERS+=(".name = \"${ITEM_NAME/"/\\"/}\"")
 
-    # JQ_FILTERS+=(".fields += lastpass_id=''")
+    # add a hidden field with the LastPass ID for cross-reference
+    LASTPASS_ID_FIELD=$(printf '%s' "${TEMPLATES[FIELD]}" | jq --monochrome-output ".name = \"lastpass_id\" | .value = \"${ITEM_ID}\" | .type = 1")
+
+    JQ_FILTERS+=(".fields += [${LASTPASS_ID_FIELD}]")
 
     JQ_FILTERS_STRING=$(joinArray ' | ' "${JQ_FILTERS[@]}")
 
