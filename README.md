@@ -29,10 +29,12 @@ $ load.sh -d -p passphrase.txt /tmp/lpass
 - `cut` - pre-installed with macOS and most Linux distributions.
 - `echo` - pre-installed with macOS and most Linux distributions.
 - `find` - pre-installed with macOS and most Linux distributions.
+- `gdate` - install via coreutils using [Homebrew](https://formulae.brew.sh/formula/coreutils), another package manager, or [manually](https://www.gnu.org/software/coreutils/).
 - `gpg` - optional; GNU Privacy Guard; install using [Homebrew](https://formulae.brew.sh/formula/gnupg), another package manager, or [manually](https://gnupg.org/).
 - `grep` - pre-installed with macOS and most Linux distributions.
-- `jq` - install via coreutils using [Homebrew](https://formulae.brew.sh/formula/jq), another package manager, or [manually](https://stedolan.github.io/jq/).
+- `jq` - install using [Homebrew](https://formulae.brew.sh/formula/jq), another package manager, or [manually](https://stedolan.github.io/jq/).
 - `realpath` - install via coreutils using [Homebrew](https://formulae.brew.sh/formula/coreutils), another package manager, or [manually](https://www.gnu.org/software/coreutils/).
+- `sed` - pre-installed with macOS and most Linux distributions.
 - `tr` - pre-installed with macOS and most Linux distributions.
 - `xargs` - pre-installed with macOS and most Linux distributions.
 
@@ -41,3 +43,15 @@ $ load.sh -d -p passphrase.txt /tmp/lpass
 This script was tested on macOS Monterey (12.6) using GNU Bash 5.2.15,
 but should work on any GNU/Linux system that supports the dependencies
 above.
+
+## Enhancements
+
+- [ ] Allow organization per folder.
+- [ ] Handle attachments.
+- [ ] Dry run mode.
+- [ ] Trim passwords, usernames, entry names, etc.?
+- [x] Ignore dummy or invalid URLs (<https://>)
+- [ ] Process: "Start Date", "Expiration", "Expiration Date"?
+- [ ] Trim fields?
+- [ ] Handle multiple notes values with same key.
+- [ ] Upsert.
