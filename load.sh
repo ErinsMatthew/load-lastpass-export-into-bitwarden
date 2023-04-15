@@ -7,7 +7,7 @@ shopt -s extglob
 
 usage() {
     cat << EOT 1>&2
-Usage: load.sh [-dfhkq] [-a algo] [-o org] [-p fn] [-x ext] dir
+Usage: load.sh [-dfhkqz] [-a algo] [-o org] [-p fn] [-x ext] dir
 
 OPTIONS
 =======
@@ -20,6 +20,7 @@ OPTIONS
 -p fn       use 'fn' for passphrase file to decrypt
 -q          do not display status information
 -x ext      use 'ext' as extension for encrypted files; default: enc
+-z          do not perform actions; dry run mode
 
 ARGUMENTS
 =========
@@ -41,17 +42,23 @@ initGlobals() {
         [DEBUG]='false'                 # -d
         [DECRYPT_DATA]='false'          # -p
         [DECRYPTION_ALGO]=''            # -a
+        [DRY_RUN]='false'               # -z
         [ENCRYPTED_EXTENSION]=''        # -x
+        [INPUT_DIR]=''                  # dir
         [KEEP_LANGUAGE_CODE]='false'    # -k
         [ORGANIZATION_ID]=''            # -o
-        [INPUT_DIR]=''                  # dir
         [OVERWRITE_OPTION]=''           # -f
         [PASSPHRASE_FILE]=''            # -p
+        [TEMP_DIR]=$(mktemp -d)
     )
 
     declare -Ag FOLDERS_HASH=()
 
+    declare -Ag ITEMS_HASH=()
+
     declare -Ag TEMPLATES=()
+
+    declare -g LASTPASS_ID_FIELD_NAME=lastpass_id
 
     declare -agr NOTE_FIELDS=(
         'Account Number'
@@ -144,7 +151,7 @@ processOptions() {
 
     [[ $# -eq 0 ]] && usage
 
-    while getopts ":a:dfhko:p:qx:" FLAG; do
+    while getopts ":a:dfhko:p:qx:z" FLAG; do
         case "${FLAG}" in
             a)
                 GLOBALS[DECRYPTION_ALGO]=${OPTARG}
@@ -196,6 +203,12 @@ processOptions() {
                 GLOBALS[ENCRYPTED_EXTENSION]=${OPTARG}
 
                 debug "Encrypted extension set to '${GLOBALS[ENCRYPTED_EXTENSION]}'."
+                ;;
+
+            z)
+                GLOBALS[DRY_RUN]='true'
+
+                debug "Dry run mode turned on."
                 ;;
 
             h | *)
@@ -266,7 +279,7 @@ checkForDependency() {
 dependencyCheck() {
     local DEPENDENCY
 
-    for DEPENDENCY in bw cat cut echo find gdate grep jq realpath sed tr xargs; do
+    for DEPENDENCY in base64 bw cat cut echo find gdate grep jq realpath sed tr xargs; do
         checkForDependency "${DEPENDENCY}"
     done
 
@@ -286,8 +299,8 @@ decryptData() {
     fi
 }
 
-getItemProperty() {
-    printf '%s' "$1" | jq --raw-output "$2"
+getLastPassItemProperty() {
+    printf '%s' "$1" | jq --raw-output "$2" | trim
 }
 
 loadTemplates() {
@@ -309,18 +322,34 @@ loadFolderHash() {
     local FOLDER_NAME
 
     while read -r FOLDER_JSON; do
-        FOLDER_ID=$(getItemProperty "${FOLDER_JSON}" '.id')
-        FOLDER_NAME=$(getItemProperty "${FOLDER_JSON}" '.name')
+        FOLDER_ID=$(getLastPassItemProperty "${FOLDER_JSON}" '.id')
+        FOLDER_NAME=$(getLastPassItemProperty "${FOLDER_JSON}" '.name')
 
-        # if folder name is specified and does not exist as a key, add it
+        # if folder does not exist in hash, add it
         if [[ -z ${FOLDERS_HASH[${FOLDER_NAME}]+_} ]]; then
-            debug "Adding folder '${FOLDER_NAME}' (ID: '${FOLDER_ID}')."
+            debug "Adding folder '${FOLDER_NAME}' (ID: '${FOLDER_ID}') to hash."
 
             FOLDERS_HASH[${FOLDER_NAME}]=${FOLDER_ID}
         else
             debug "Found a duplicate folder '${FOLDER_NAME}' (ID: '${FOLDER_ID}')."
         fi
     done < <(bw list folders | jq --compact-output '.[]')
+}
+
+loadItemHash() {
+    local BITWARDEN_ITEM_JSON
+    local LASTPASS_ITEM_ID
+
+    while read -r BITWARDEN_ITEM_JSON; do
+        LASTPASS_ITEM_ID=$(printf '%s' "${BITWARDEN_ITEM_JSON}" | jq --raw-output ".fields[] | select( .name == \"${LASTPASS_ID_FIELD_NAME}\" ) | .value")
+
+        # if item does not exist in hash, add it
+        if [[ -n ${LASTPASS_ITEM_ID} && -z ${ITEMS_HASH[${LASTPASS_ITEM_ID}]+_} ]]; then
+            debug "Adding item '${LASTPASS_ITEM_ID}' to hash."
+
+            ITEMS_HASH[${LASTPASS_ITEM_ID}]=${BITWARDEN_ITEM_JSON}
+        fi
+    done < <(bw list items | jq --compact-output ".[] | select( .fields != null ) | select( .fields[].name == \"${LASTPASS_ID_FIELD_NAME}\" )")
 }
 
 createFolder() {
@@ -338,49 +367,47 @@ createFolder() {
 checkFolder() {
     local FOLDER_NAME
 
-    FOLDER_NAME=$(getItemProperty "$1" '.group')
+    FOLDER_NAME=$(getLastPassItemProperty "$1" '.group')
 
-    debug "Checking for folder named '${FOLDER_NAME}'."
+    if [[ -n ${FOLDER_NAME} ]]; then
+        debug "Checking for folder named '${FOLDER_NAME}'."
 
-    # if folder name is specified and does not exist as a key, add it
-    if [[ -n ${FOLDER_NAME} && -z ${FOLDERS_HASH[${FOLDER_NAME}]+_} ]]; then
-        createFolder "${FOLDER_NAME}"
+        # if folder name is specified and does not exist as a key, add it
+        if [[ -z ${FOLDERS_HASH[${FOLDER_NAME}]+_} ]]; then
+            createFolder "${FOLDER_NAME}"
+        fi
     fi
 }
 
-getNoteField() {
-    printf '%s' "$1" | grep "^$2:" | cut -d : -f 2-
+getLastPassNoteFieldValue() {
+    printf '%s' "$1" | grep "^$2:" | cut -d : -f 2- | trim
 
     # TODO: escape quotes?
 }
 
-getItemType() {
-    local ITEM_JSON
+getLastPassItemType() {
+    local LASTPASS_ITEM_JSON
     local ITEM_URL
     local ITEM_NOTES
-    local ITEM_TYPE
+    local LASTPASS_ITEM_TYPE
 
-    ITEM_JSON=$1
+    LASTPASS_ITEM_JSON=$1
 
-    ITEM_URL=$(getItemProperty "${ITEM_JSON}" '.url')
+    ITEM_URL=$(getLastPassItemProperty "${LASTPASS_ITEM_JSON}" '.url')
 
     if [[ ${ITEM_URL} == 'http://sn' ]]; then
-        ITEM_NOTES=$(getItemProperty "${ITEM_JSON}" '.note')
+        ITEM_NOTES=$(getLastPassItemProperty "${LASTPASS_ITEM_JSON}" '.note')
 
-        ITEM_TYPE=$(getNoteField "${ITEM_NOTES}" 'NoteType')
+        LASTPASS_ITEM_TYPE=$(getLastPassNoteFieldValue "${ITEM_NOTES}" 'NoteType')
 
-        if [[ -z ${ITEM_TYPE} ]]; then
-            ITEM_TYPE='Secure Note'
+        if [[ -z ${LASTPASS_ITEM_TYPE} ]]; then
+            LASTPASS_ITEM_TYPE='Secure Note'
         fi
 
-        echo "${ITEM_TYPE}"
+        echo "${LASTPASS_ITEM_TYPE}"
     else
         echo 'Password'
     fi
-}
-
-addAttachments() {
-    debug "Adding attachments."
 }
 
 # Adapted from <https://stackoverflow.com/a/17841619/2647496>.
@@ -396,7 +423,7 @@ joinArray() {
     fi
 }
 
-removeItemNote() {
+removeLastPassItemNoteField() {
     printf '%s' "$1" | grep -v "^$2:"
 }
 
@@ -416,19 +443,100 @@ trim() {
 }
 
 filterDummyUrls() {
-    sed -e 's/^http{,s}:\/\/$//' \
-      -e 's/^xn--https:\/\/-$//' | trim
+    sed -E -e 's#https?://$##' \
+      -e 's#xn--https?://-$##' | trim
+}
+
+bwEditOrCreate() {
+    local BITWARDEN_ITEM_JSON
+
+    if [[ ${GLOBALS[DRY_RUN]} == 'true' ]]; then
+        if [[ $1 == 'edit' ]]; then
+            printf -v BITWARDEN_ITEM_JSON '{ "id": "%s" }' "$(cut -d ' ' -f 1)"
+        else
+            BITWARDEN_ITEM_JSON=$(base64 --decode)
+        fi
+    else
+        if [[ $1 == 'edit' ]]; then
+            BITWARDEN_ITEM_JSON=$(bw edit item)
+        else
+            BITWARDEN_ITEM_JSON=$(bw create item)
+        fi
+    fi
+
+    printf '%s' "${BITWARDEN_ITEM_JSON}" | jq --raw-output '.id // ""'
 }
 
 upsertItem() {
-    # https://bitwarden.com/help/cli/#create
+    local BITWARDEN_ITEM_JSON
+    local ENCODED_JSON
+    local BITWARDEN_ITEM_ID
 
-    #bw encode | \
-    cat
+    BITWARDEN_ITEM_JSON=$1
+
+    ENCODED_JSON=$(printf '%s' "${BITWARDEN_ITEM_JSON}" | bw encode)
+
+    BITWARDEN_ITEM_ID=$(printf '%s' "${BITWARDEN_ITEM_JSON}" | jq --raw-output '.id // ""')
+
+    if [[ -n ${BITWARDEN_ITEM_ID} ]]; then
+        printf '%s %s' "${BITWARDEN_ITEM_ID}" "${ENCODED_JSON}" | \
+          bwEditOrCreate 'edit'
+    else
+        printf '%s' "${ENCODED_JSON}" | \
+          bwEditOrCreate 'create'
+    fi
+}
+
+processAttachments() {
+    local LASTPASS_ITEM_ID
+
+    LASTPASS_ITEM_ID=$1
+
+    if [[ -d ${GLOBALS[INPUT_DIR]}/${LASTPASS_ITEM_ID} ]]; then
+        local BITWARDEN_ITEM_ID
+        local FILE_LIST
+        local NUM_ITEMS
+        local COUNTER
+        local FILE
+        local TEMP_FILE
+
+        BITWARDEN_ITEM_ID=$2
+
+        debug "Processing attachments for '${LASTPASS_ITEM_ID}' (Bitwarden Item ID: ${BITWARDEN_ITEM_ID})."
+
+        # build array of attachment file names in item directory
+        mapfile -d '' FILE_LIST < <(find "${GLOBALS[INPUT_DIR]}/${LASTPASS_ITEM_ID}" -type f -depth 1 -print0 | xargs -0 realpath -z)
+
+        NUM_ITEMS=${#FILE_LIST[@]}
+
+        if [[ ${NUM_ITEMS} -gt 0 ]]; then
+            debug "Found ${NUM_ITEMS} attachments for '${LASTPASS_ITEM_ID}'."
+
+            for FILE in "${FILE_LIST[@]}"; do
+                debug "Processing attachment '${FILE}'."
+
+                TEMP_FILE=${GLOBALS[TEMP_DIR]}/$(basename "${FILE}")
+
+                decryptData "${FILE}" > "${TEMP_FILE}"
+
+                # bw create attachment --file "${TEMP_FILE}" --itemid "${BITWARDEN_ITEM_ID}"
+
+                rm -f "${TEMP_FILE}"
+            done
+        fi
+    fi
+}
+
+getBitwardenItemJson() {
+    if [[ -n ${ITEMS_HASH[$1]+_} ]]; then
+        printf '%s' "${ITEMS_HASH[$1]}"
+    else
+        printf '%s' "${TEMPLATES[ITEM]}"
+    fi
 }
 
 processItem() {
-    local ITEM_JSON
+    local LASTPASS_ITEM_JSON
     local LASTPASS_ITEM_ID
     local LASTPASS_ITEM_TYPE
     local ITEM_NOTES
@@ -445,29 +553,31 @@ processItem() {
     local LASTPASS_ID_FIELD
     local EXPIRATION_DATE
     local EXPIRATION_MONTH_NAME
+    local BITWARDEN_ITEM_JSON
+    local BITWARDEN_ITEM_ID
 
     local -A NOTE_FIELD_VALUES=()
     local -a SUB_FILTERS=()
     local -a JQ_FILTERS=()
 
-    ITEM_JSON=$1
+    LASTPASS_ITEM_JSON=$1
 
-    checkFolder "${ITEM_JSON}"
+    checkFolder "${LASTPASS_ITEM_JSON}"
 
-    LASTPASS_ITEM_ID=$(getItemProperty "${ITEM_JSON}" '.id')
+    LASTPASS_ITEM_ID=$(getLastPassItemProperty "${LASTPASS_ITEM_JSON}" '.id')
 
-    LASTPASS_ITEM_TYPE=$(getItemType "${ITEM_JSON}")
+    LASTPASS_ITEM_TYPE=$(getLastPassItemType "${LASTPASS_ITEM_JSON}")
 
     debug "Processing item (ID: '${LASTPASS_ITEM_ID}') of type '${LASTPASS_ITEM_TYPE}'."
 
-    ITEM_NOTES=$(getItemProperty "${ITEM_JSON}" '.note')
+    ITEM_NOTES=$(getLastPassItemProperty "${LASTPASS_ITEM_JSON}" '.note')
 
     for FIELD in "${NOTE_FIELDS[@]}"; do
         # TODO: Handle mutliple values with same field name.
 
-        NOTE_FIELD_VALUES[${FIELD}]=$(getNoteField "${ITEM_NOTES}" "${FIELD}")
+        NOTE_FIELD_VALUES[${FIELD}]=$(getLastPassNoteFieldValue "${ITEM_NOTES}" "${FIELD}")
 
-        ITEM_NOTES=$(removeItemNote "${ITEM_NOTES}" "${FIELD}")
+        ITEM_NOTES=$(removeLastPassItemNoteField "${ITEM_NOTES}" "${FIELD}")
 
         if [[ -z ${NOTE_FIELD_VALUES[${FIELD}]} ]]; then
             unset "NOTE_FIELD_VALUES[${FIELD}]"
@@ -542,29 +652,23 @@ processItem() {
               jq "${SUB_FILTERS_STRING}")")
             ;;
 
-        'Membership')
-            ITEM_TYPE_CODE=1    # Login
-
-            # NoteType:Membership\nOrganization:\nMembership Number:\nMember Name:\nStart Date:,,\nExpiration Date:\nWebsite:\nTelephone:\nPassword:\nNotes:
-            ;;
-
         'Email Account' | 'Password')
             ITEM_TYPE_CODE=1    # Login
 
             SUB_FILTERS=()
 
-            ITEM_USERNAME=$(getItemProperty "${ITEM_JSON}" '.username')
-            ITEM_PASSWORD=$(getItemProperty "${ITEM_JSON}" '.password')
+            ITEM_USERNAME=$(getLastPassItemProperty "${LASTPASS_ITEM_JSON}" '.username')
+            ITEM_PASSWORD=$(getLastPassItemProperty "${LASTPASS_ITEM_JSON}" '.password')
 
             SUB_FILTERS+=(".username = \"${ITEM_USERNAME/"/\\"/}\"")
             SUB_FILTERS+=(".password = \"${ITEM_PASSWORD/"/\\"/}\"")
 
-            ITEM_URL=$(getItemProperty "${ITEM_JSON}" '.url' | filterDummyUrls)
+            ITEM_URL=$(getLastPassItemProperty "${LASTPASS_ITEM_JSON}" '.url' | filterDummyUrls)
 
             if [[ -n ${ITEM_URL} ]]; then
                 URIS=$(printf '%s' "${TEMPLATES[URI]}" | jq ".uri = \"${ITEM_URL}\"")
 
-                SUB_FILTERS+=(".uris = ${URIS}")
+                SUB_FILTERS+=(".uris += [${URIS}]")
             fi
 
             SUB_FILTERS_STRING=$(joinArray ' | ' "${SUB_FILTERS[@]}")
@@ -575,7 +679,7 @@ processItem() {
             JQ_FILTERS+=(".login = ${LOGIN}")
             ;;
 
-        'Bank Account' | 'Insurance' | 'Passport' | 'Social Security' | 'Health Insurance' | 'Secure Note')
+        'Bank Account' | 'Insurance' | 'Membership' | 'Passport' | 'Social Security' | 'Health Insurance' | 'Secure Note')
             ITEM_TYPE_CODE=2    # Secure Note
             ;;
 
@@ -586,7 +690,7 @@ processItem() {
             ;;
     esac
 
-    ITEM_FOLDER_NAME=$(getItemProperty "${ITEM_JSON}" '.group')
+    ITEM_FOLDER_NAME=$(getLastPassItemProperty "${LASTPASS_ITEM_JSON}" '.group')
 
     if [[ -n ${ITEM_FOLDER_NAME} ]]; then
         JQ_FILTERS+=(".folderId = \"${FOLDERS_HASH[${ITEM_FOLDER_NAME}]}\"")
@@ -594,7 +698,7 @@ processItem() {
 
     JQ_FILTERS+=(".type = ${ITEM_TYPE_CODE}")
 
-    ITEM_NAME=$(getItemProperty "${ITEM_JSON}" '.name')
+    ITEM_NAME=$(getLastPassItemProperty "${LASTPASS_ITEM_JSON}" '.name')
 
     JQ_FILTERS+=(".name = \"${ITEM_NAME/"/\\"/}\"")
 
@@ -604,24 +708,35 @@ processItem() {
 
     # add remaining notes fields
     for FIELD in "${!NOTE_FIELD_VALUES[@]}"; do
-        CUSTOM_FIELD=$(printf '%s' "${TEMPLATES[FIELD]}" | jq ".name = \"${FIELD}\" | .value = \"${NOTE_FIELD_VALUES[${FIELD}]/"/\\"/}\"")
+        CUSTOM_FIELD=$(printf '%s' "${TEMPLATES[FIELD]}" | \
+          jq ".name = \"${FIELD}\" | .value = \"${NOTE_FIELD_VALUES[${FIELD}]/"/\\"/}\"")
 
         JQ_FILTERS+=(".fields += [${CUSTOM_FIELD}]")
     done
 
     # add a hidden field with the LastPass ID for cross-reference
-    LASTPASS_ID_FIELD=$(printf '%s' "${TEMPLATES[FIELD]}" | jq ".name = \"lastpass_id\" | .value = \"${LASTPASS_ITEM_ID}\" | .type = 1")
+    LASTPASS_ID_FIELD=$(printf '%s' "${TEMPLATES[FIELD]}" | \
+      jq ".name = \"${LASTPASS_ID_FIELD_NAME}\" | .value = \"${LASTPASS_ITEM_ID}\" | .type = 1")
 
     JQ_FILTERS+=(".fields += [${LASTPASS_ID_FIELD}]")
 
     JQ_FILTERS_STRING=$(joinArray ' | ' "${JQ_FILTERS[@]}")
 
-    printf '%s' "${TEMPLATES[ITEM]}" | \
-      jq --monochrome-output "${JQ_FILTERS_STRING}" # | \
-      #upsertItem
+    BITWARDEN_ITEM_JSON=$(getBitwardenItemJson "${LASTPASS_ITEM_ID}" | \
+      jq "${JQ_FILTERS_STRING}")
 
-    # TODO: Attachments
-    # bw create attachment --file ./path/to/file --itemid 16b15b89-65b3-4639-ad2a-95052a6d8f66
+    # TODO: if [[ changes ]]; then
+    debug "Upserting item (ID: '${LASTPASS_ITEM_ID}')."
+
+    debug "BITWARDEN_ITEM_JSON = ${BITWARDEN_ITEM_JSON}"
+
+    BITWARDEN_ITEM_ID=$(upsertItem "${BITWARDEN_ITEM_JSON}")
+
+    debug "BITWARDEN_ITEM_ID = ${BITWARDEN_ITEM_ID}"
+
+    if [[ -n ${BITWARDEN_ITEM_ID} ]]; then
+        processAttachments "${LASTPASS_ITEM_ID}" "${BITWARDEN_ITEM_ID}"
+    fi
 }
 
 showProgress() {
@@ -644,6 +759,8 @@ performSetup() {
     loadTemplates
 
     loadFolderHash
+
+    loadItemHash
 }
 
 processLastPassExport() {

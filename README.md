@@ -24,6 +24,8 @@ $ load.sh -d -p passphrase.txt /tmp/lpass
 
 ## Dependencies
 
+- `base64` - pre-installed with macOS and most Linux distributions.
+- `basename` - pre-installed with macOS and most Linux distributions.
 - `bw` - Bitwarden CLI; install using [Homebrew](https://formulae.brew.sh/formula/bitwarden-cli), another package manager, or [manually](https://bitwarden.com/help/cli/).
 - `cat` - pre-installed with macOS and most Linux distributions.
 - `cut` - pre-installed with macOS and most Linux distributions.
@@ -33,6 +35,7 @@ $ load.sh -d -p passphrase.txt /tmp/lpass
 - `gpg` - optional; GNU Privacy Guard; install using [Homebrew](https://formulae.brew.sh/formula/gnupg), another package manager, or [manually](https://gnupg.org/).
 - `grep` - pre-installed with macOS and most Linux distributions.
 - `jq` - install using [Homebrew](https://formulae.brew.sh/formula/jq), another package manager, or [manually](https://stedolan.github.io/jq/).
+- `mktemp` - pre-installed with macOS and most Linux distributions.
 - `realpath` - install via coreutils using [Homebrew](https://formulae.brew.sh/formula/coreutils), another package manager, or [manually](https://www.gnu.org/software/coreutils/).
 - `sed` - pre-installed with macOS and most Linux distributions.
 - `tr` - pre-installed with macOS and most Linux distributions.
@@ -52,6 +55,5 @@ above.
 - [ ] Trim passwords, usernames, entry names, etc.?
 - [x] Ignore dummy or invalid URLs (<https://>)
 - [ ] Process: "Start Date", "Expiration", "Expiration Date"?
-- [ ] Trim fields?
 - [ ] Handle multiple notes values with same key.
 - [ ] Upsert.
