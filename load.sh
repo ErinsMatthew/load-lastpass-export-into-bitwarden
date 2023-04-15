@@ -448,23 +448,23 @@ filterDummyUrls() {
 }
 
 bwEditOrCreate() {
-    local BITWARDEN_ITEM_JSON
+    local BITWARDEN_ITEM_ID
+
+    BITWARDEN_ITEM_ID=${2:-0}
 
     if [[ ${GLOBALS[DRY_RUN]} == 'true' ]]; then
         if [[ $1 == 'edit' ]]; then
-            printf -v BITWARDEN_ITEM_JSON '{ "id": "%s" }' "$(cut -d ' ' -f 1)"
+            printf '{ "id": "%s" }' "${BITWARDEN_ITEM_ID}"
         else
-            BITWARDEN_ITEM_JSON=$(base64 --decode)
+            base64 --decode
         fi
     else
         if [[ $1 == 'edit' ]]; then
-            BITWARDEN_ITEM_JSON=$(bw edit item)
+            bw edit item "${BITWARDEN_ITEM_ID}"
         else
-            BITWARDEN_ITEM_JSON=$(bw create item)
+            bw create item
         fi
     fi
-
-    printf '%s' "${BITWARDEN_ITEM_JSON}" | jq --raw-output '.id // ""'
 }
 
 upsertItem() {
@@ -479,11 +479,13 @@ upsertItem() {
     BITWARDEN_ITEM_ID=$(printf '%s' "${BITWARDEN_ITEM_JSON}" | jq --raw-output '.id // ""')
 
     if [[ -n ${BITWARDEN_ITEM_ID} ]]; then
-        printf '%s %s' "${BITWARDEN_ITEM_ID}" "${ENCODED_JSON}" | \
-          bwEditOrCreate 'edit'
+        printf '%s' "${ENCODED_JSON}" | \
+          bwEditOrCreate 'edit' "${BITWARDEN_ITEM_ID}" | \
+          jq --raw-output '.id // ""'
     else
         printf '%s' "${ENCODED_JSON}" | \
-          bwEditOrCreate 'create'
+          bwEditOrCreate 'create' | \
+          jq --raw-output '.id // ""'
     fi
 }
 
@@ -535,13 +537,38 @@ getBitwardenItemJson() {
     fi
 }
 
+addField() {
+    local -n JQ_FILTERS_REF
+    local BITWARDEN_ITEM_JSON
+    local CUSTOM_FIELD_NAME
+    local CUSTOM_FIELD_VALUE
+    local CUSTOM_FIELD_TYPE
+    local NUM_FIELDS
+    local CUSTOM_FIELD
+
+    JQ_FILTERS_REF=$1
+    BITWARDEN_ITEM_JSON=$2
+    CUSTOM_FIELD_NAME=$3
+    CUSTOM_FIELD_VALUE=$4
+    CUSTOM_FIELD_TYPE=${5:-0}       # default to zero
+
+    NUM_FIELDS=$(printf '%s' "${BITWARDEN_ITEM_JSON}" | \
+      jq --raw-output ".fields[] | select( .name == \"${CUSTOM_FIELD_NAME}\" and .value == \"${CUSTOM_FIELD_VALUE}\" ) | length")
+
+    if [[ ${NUM_FIELDS} -eq 0 ]]; then
+        CUSTOM_FIELD=$(printf '%s' "${TEMPLATES[FIELD]}" | \
+        jq ".name = \"${CUSTOM_FIELD_NAME}\" | .value = \"${CUSTOM_FIELD_VALUE}\" | .type = ${CUSTOM_FIELD_TYPE}")
+
+        JQ_FILTERS_REF+=(".fields += [${CUSTOM_FIELD}]")
+    fi
+}
+
 processItem() {
     local LASTPASS_ITEM_JSON
     local LASTPASS_ITEM_ID
     local LASTPASS_ITEM_TYPE
     local ITEM_NOTES
     local FIELD
-    local CUSTOM_FIELD
     local SUB_FILTERS_STRING
     local JQ_FILTERS_STRING
     local ITEM_TYPE_CODE
@@ -550,7 +577,6 @@ processItem() {
     local ITEM_PASSWORD
     local URIS
     local LOGIN
-    local LASTPASS_ID_FIELD
     local EXPIRATION_DATE
     local EXPIRATION_MONTH_NAME
     local BITWARDEN_ITEM_JSON
@@ -706,23 +732,18 @@ processItem() {
 
     JQ_FILTERS+=(".notes = \"${ITEM_NOTES/"/\\"/}\"")
 
+    BITWARDEN_ITEM_JSON=$(getBitwardenItemJson "${LASTPASS_ITEM_ID}")
+
     # add remaining notes fields
     for FIELD in "${!NOTE_FIELD_VALUES[@]}"; do
-        CUSTOM_FIELD=$(printf '%s' "${TEMPLATES[FIELD]}" | \
-          jq ".name = \"${FIELD}\" | .value = \"${NOTE_FIELD_VALUES[${FIELD}]/"/\\"/}\"")
-
-        JQ_FILTERS+=(".fields += [${CUSTOM_FIELD}]")
+        addField JQ_FILTERS "${BITWARDEN_ITEM_JSON}" "${FIELD}" "${NOTE_FIELD_VALUES[${FIELD}]/"/\\"/}"
     done
 
-    # add a hidden field with the LastPass ID for cross-reference
-    LASTPASS_ID_FIELD=$(printf '%s' "${TEMPLATES[FIELD]}" | \
-      jq ".name = \"${LASTPASS_ID_FIELD_NAME}\" | .value = \"${LASTPASS_ITEM_ID}\" | .type = 1")
-
-    JQ_FILTERS+=(".fields += [${LASTPASS_ID_FIELD}]")
+    addField JQ_FILTERS "${BITWARDEN_ITEM_JSON}" "${LASTPASS_ID_FIELD_NAME}" "${LASTPASS_ITEM_ID}"
 
     JQ_FILTERS_STRING=$(joinArray ' | ' "${JQ_FILTERS[@]}")
 
-    BITWARDEN_ITEM_JSON=$(getBitwardenItemJson "${LASTPASS_ITEM_ID}" | \
+    BITWARDEN_ITEM_JSON=$(printf '%s' "${BITWARDEN_ITEM_JSON}" | \
       jq "${JQ_FILTERS_STRING}")
 
     # TODO: if [[ changes ]]; then
