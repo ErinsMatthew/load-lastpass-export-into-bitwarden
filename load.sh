@@ -388,7 +388,7 @@ getLastPassNoteFieldValue() {
 getLastPassItemType() {
     local LASTPASS_ITEM_JSON
     local ITEM_URL
-    local ITEM_NOTES
+    local LASTPASS_ITEM_NOTES
     local LASTPASS_ITEM_TYPE
 
     LASTPASS_ITEM_JSON=$1
@@ -396,9 +396,9 @@ getLastPassItemType() {
     ITEM_URL=$(getLastPassItemProperty "${LASTPASS_ITEM_JSON}" '.url')
 
     if [[ ${ITEM_URL} == 'http://sn' ]]; then
-        ITEM_NOTES=$(getLastPassItemProperty "${LASTPASS_ITEM_JSON}" '.note')
+        LASTPASS_ITEM_NOTES=$(getLastPassItemProperty "${LASTPASS_ITEM_JSON}" '.note')
 
-        LASTPASS_ITEM_TYPE=$(getLastPassNoteFieldValue "${ITEM_NOTES}" 'NoteType')
+        LASTPASS_ITEM_TYPE=$(getLastPassNoteFieldValue "${LASTPASS_ITEM_NOTES}" 'NoteType')
 
         if [[ -z ${LASTPASS_ITEM_TYPE} ]]; then
             LASTPASS_ITEM_TYPE='Secure Note'
@@ -563,11 +563,40 @@ addField() {
     fi
 }
 
+processLastPassNoteFields() {
+    local LASTPASS_ITEM_NOTES
+    local -nA NOTE_FIELD_VALUES_REF
+    local FIELD
+
+    LASTPASS_ITEM_NOTES=$1
+    NOTE_FIELD_VALUES_REF=$2
+
+    for FIELD in "${NOTE_FIELDS[@]}"; do
+        # TODO: Handle mutliple values with same field name.
+
+        NOTE_FIELD_VALUES_REF[${FIELD}]=$(getLastPassNoteFieldValue "${LASTPASS_ITEM_NOTES}" "${FIELD}")
+
+        LASTPASS_ITEM_NOTES=$(removeLastPassItemNoteField "${LASTPASS_ITEM_NOTES}" "${FIELD}")
+
+        if [[ -z ${NOTE_FIELD_VALUES_REF[${FIELD}]} ]]; then
+            unset "NOTE_FIELD_VALUES_REF[${FIELD}]"
+        fi
+    done
+
+    unset "NOTE_FIELD_VALUES_REF[NoteType]"
+
+    if [[ ${GLOBALS[KEEP_LANGUAGE_CODE]} != 'true' ]]; then
+        unset "NOTE_FIELD_VALUES_REF[Language]"
+    fi
+
+    printf '%s' "${LASTPASS_ITEM_NOTES}"
+}
+
 processItem() {
     local LASTPASS_ITEM_JSON
     local LASTPASS_ITEM_ID
     local LASTPASS_ITEM_TYPE
-    local ITEM_NOTES
+    local LASTPASS_ITEM_NOTES
     local FIELD
     local SUB_FILTERS_STRING
     local JQ_FILTERS_STRING
@@ -596,25 +625,9 @@ processItem() {
 
     debug "Processing item (ID: '${LASTPASS_ITEM_ID}') of type '${LASTPASS_ITEM_TYPE}'."
 
-    ITEM_NOTES=$(getLastPassItemProperty "${LASTPASS_ITEM_JSON}" '.note')
+    LASTPASS_ITEM_NOTES=$(getLastPassItemProperty "${LASTPASS_ITEM_JSON}" '.note')
 
-    for FIELD in "${NOTE_FIELDS[@]}"; do
-        # TODO: Handle mutliple values with same field name.
-
-        NOTE_FIELD_VALUES[${FIELD}]=$(getLastPassNoteFieldValue "${ITEM_NOTES}" "${FIELD}")
-
-        ITEM_NOTES=$(removeLastPassItemNoteField "${ITEM_NOTES}" "${FIELD}")
-
-        if [[ -z ${NOTE_FIELD_VALUES[${FIELD}]} ]]; then
-            unset "NOTE_FIELD_VALUES[${FIELD}]"
-        fi
-    done
-
-    unset "NOTE_FIELD_VALUES[NoteType]"
-
-    if [[ ${GLOBALS[KEEP_LANGUAGE_CODE]} != 'true' ]]; then
-        unset "NOTE_FIELD_VALUES[Language]"
-    fi
+    LASTPASS_ITEM_NOTES=$(processLastPassNoteFields "${LASTPASS_ITEM_NOTES}" NOTE_FIELD_VALUES)
 
     case "${LASTPASS_ITEM_TYPE}" in
         'Address')
@@ -728,9 +741,9 @@ processItem() {
 
     JQ_FILTERS+=(".name = \"${ITEM_NAME/"/\\"/}\"")
 
-    ITEM_NOTES=$(printf '%s' "${ITEM_NOTES}" | sed -e 's/^Notes://' )
+    LASTPASS_ITEM_NOTES=$(printf '%s' "${LASTPASS_ITEM_NOTES}" | sed -e 's/^Notes://' )
 
-    JQ_FILTERS+=(".notes = \"${ITEM_NOTES/"/\\"/}\"")
+    JQ_FILTERS+=(".notes = \"${LASTPASS_ITEM_NOTES/"/\\"/}\"")
 
     BITWARDEN_ITEM_JSON=$(getBitwardenItemJson "${LASTPASS_ITEM_ID}")
 
@@ -758,6 +771,7 @@ processItem() {
     if [[ -n ${BITWARDEN_ITEM_ID} ]]; then
         processAttachments "${LASTPASS_ITEM_ID}" "${BITWARDEN_ITEM_ID}"
     fi
+    # fi
 }
 
 showProgress() {
