@@ -5,22 +5,26 @@ set -o nounset
 # enable extended pattern matching features
 shopt -s extglob
 
+# remove once <https://github.com/bitwarden/clients/issues/6689> is resolved
+NODE_OPTIONS="--no-deprecation"
+
 usage() {
     cat << EOT 1>&2
-Usage: load.sh [-dfhkqz] [-a algo] [-o org] [-p fn] [-x ext] dir
+Usage: load.sh [-dhlqz] [-a algo] [-e prog] [-k kdf] [-o org] [-p fn] [-x ext] dir
 
 OPTIONS
 =======
--a algo     use 'algo' for Decryption via GnuPG; default: AES256
--d          output debug information
--f          overwrite output and index files if they already exists
--h          show help
--k          keep language code as a field
--o org      use 'org' as the organization ID
--p fn       use 'fn' for passphrase file to decrypt
--q          do not display status information
--x ext      use 'ext' as extension for encrypted files; default: enc
--z          do not perform actions; dry run mode
+-a algo   use 'algo' for decryption; default: AES256
+-d        output debug information
+-e prog   use 'prog' for encryption; either 'openssl' or 'gnupg'; default: openssl
+-h        show help
+-k kdf    use 'kdf' for key derivation function; default: pbkdf2 (OpenSSL), N/A (GnuPG)
+-l        keep language code as a field
+-o org    use 'org' as the organization ID
+-p fn     use 'fn' for passphrase file to decrypt
+-q        do not display status information
+-x ext    use 'ext' as extension for encrypted files; default: enc
+-z        do not perform actions; dry run mode
 
 ARGUMENTS
 =========
@@ -42,12 +46,13 @@ initGlobals() {
         [DEBUG]='false'                 # -d
         [DECRYPT_DATA]='false'          # -p
         [DECRYPTION_ALGO]=''            # -a
+        [DECRYPTION_KDF]=''             # -k
+        [DECRYPTION_PROG]=''            # -e
         [DRY_RUN]='false'               # -z
         [ENCRYPTED_EXTENSION]=''        # -x
         [INPUT_DIR]=''                  # dir
-        [KEEP_LANGUAGE_CODE]='false'    # -k
+        [KEEP_LANGUAGE_CODE]='false'    # -l
         [ORGANIZATION_ID]=''            # -o
-        [OVERWRITE_OPTION]=''           # -f
         [PASSPHRASE_FILE]=''            # -p
         [TEMP_DIR]=$(mktemp -d)
     )
@@ -151,7 +156,7 @@ processOptions() {
 
     [[ $# -eq 0 ]] && usage
 
-    while getopts ":a:dfhko:p:qx:z" FLAG; do
+    while getopts ":a:de:hk:lo:p:qx:z" FLAG; do
         case "${FLAG}" in
             a)
                 GLOBALS[DECRYPTION_ALGO]=${OPTARG}
@@ -165,13 +170,19 @@ processOptions() {
                 debug "Debug mode turned on."
                 ;;
 
-            f)
-                GLOBALS[OVERWRITE_OPTION]='-f'
+            e)
+                GLOBALS[DECRYPTION_PROG]=${OPTARG}
 
-                debug "Force overwrite mode turned on."
+                debug "Decryption program set to '${GLOBALS[DECRYPTION_PROG]}'."
                 ;;
 
             k)
+                GLOBALS[DECRYPTION_KDF]=${OPTARG}
+
+                debug "Decryption key derivation function set to '${GLOBALS[DECRYPTION_KDF]}'."
+                ;;
+
+            l)
                 GLOBALS[KEEP_LANGUAGE_CODE]='true'
 
                 debug "Keep language code turned on."
@@ -246,10 +257,30 @@ validateInputs() {
 
 setDefaults() {
     if [[ ${GLOBALS[DECRYPT_DATA]} == 'true' ]]; then
+        if [[ -z ${GLOBALS[DECRYPTION_PROG]} ]]; then
+            GLOBALS[DECRYPTION_PROG]='openssl'
+
+            debug "Decryption program set to default of '${GLOBALS[DECRYPTION_PROG]}'."
+        fi
+
         if [[ -z ${GLOBALS[DECRYPTION_ALGO]} ]]; then
-            GLOBALS[DECRYPTION_ALGO]='AES256'
+            if [[ ${GLOBALS[DECRYPTION_PROG]} == 'openssl' ]]; then
+                GLOBALS[DECRYPTION_ALGO]='aes-256-cbc'
+            else
+                GLOBALS[DECRYPTION_ALGO]='AES256'
+            fi
 
             debug "Decryption algorithm set to default of '${GLOBALS[DECRYPTION_ALGO]}'."
+        fi
+
+        if [[ -z ${GLOBALS[DECRYPTION_KDF]} ]]; then
+            if [[ ${GLOBALS[DECRYPTION_PROG]} == 'openssl' ]]; then
+                GLOBALS[DECRYPTION_KDF]='pbkdf2'
+            else
+                GLOBALS[DECRYPTION_KDF]=''
+            fi
+
+            debug "Decryption key derivation function set to default of '${GLOBALS[DECRYPTION_KDF]}'."
         fi
 
         if [[ -z ${GLOBALS[ENCRYPTED_EXTENSION]} ]]; then
@@ -257,12 +288,6 @@ setDefaults() {
 
             debug "Encrypted extension set to default of '${GLOBALS[ENCRYPTED_EXTENSION]}'."
         fi
-    fi
-
-    if [[ -z ${GLOBALS[OVERWRITE_OPTION]} ]]; then
-        GLOBALS[OVERWRITE_OPTION]=''
-
-        debug "Overwrite option set to default of '${GLOBALS[OVERWRITE_OPTION]}'."
     fi
 }
 
@@ -284,16 +309,28 @@ dependencyCheck() {
     done
 
     if [[ ${GLOBALS[DECRYPT_DATA]} == 'true' ]]; then
-        checkForDependency gpg
+        if [[ ${GLOBALS[DECRYPTION_PROG]} == 'openssl' ]]; then
+            checkForDependency openssl
+        else
+            checkForDependency gpg
+        fi
     fi
 }
 
 decryptData() {
     if [[ ${GLOBALS[DECRYPT_DATA]} == 'true' ]]; then
-        gpg --quiet --batch --decrypt \
-          --passphrase-file "${GLOBALS[PASSPHRASE_FILE]}" \
-          --cipher-algo "${GLOBALS[DECRYPTION_ALGO]}" \
-          "$1"
+        if [[ ${GLOBALS[DECRYPTION_PROG]} == 'openssl' ]]; then
+            openssl enc -d \
+              -"${GLOBALS[DECRYPTION_ALGO]}" \
+              -"${GLOBALS[DECRYPTION_KDF]}" \
+              -pass file:"${GLOBALS[PASSPHRASE_FILE]}" \
+              -in "$1"
+        else
+            gpg --quiet --batch --decrypt \
+            --passphrase-file "${GLOBALS[PASSPHRASE_FILE]}" \
+            --cipher-algo "${GLOBALS[DECRYPTION_ALGO]}" \
+            "$1"
+        fi
     else
         cat "$1"
     fi
@@ -311,7 +348,7 @@ loadTemplates() {
     TEMPLATES[FOLDER]=$(bw get template folder)
     TEMPLATES[IDENTITY]=$(bw get template item.identity)
     TEMPLATES[ITEM]=$(bw get template item)
-    TEMPLATES[LOGIN]=$(bw get template item.login | jq '.totp = null')
+    TEMPLATES[LOGIN]=$(bw get template item.login | jq '.fido2Credentials = null' | jq '.totp = null')
     TEMPLATES[NOTE]=$(bw get template item.secureNote)
     TEMPLATES[URI]=$(bw get template item.login.uri)
 }
@@ -341,7 +378,11 @@ loadItemHash() {
     local LASTPASS_ITEM_ID
 
     while read -r BITWARDEN_ITEM_JSON; do
-        LASTPASS_ITEM_ID=$(printf '%s' "${BITWARDEN_ITEM_JSON}" | jq --raw-output ".fields[] | select( .name == \"${LASTPASS_ID_FIELD_NAME}\" ) | .value")
+        # FIXME: select first element in case an item has multiple fields with same name
+        LASTPASS_ITEM_ID=$(printf '%s' "${BITWARDEN_ITEM_JSON}" | \
+          jq --raw-output \
+          --arg fieldName "${LASTPASS_ID_FIELD_NAME}" \
+          '.fields[] | select( .name == $fieldName ) | .value')
 
         # if item does not exist in hash, add it
         if [[ -n ${LASTPASS_ITEM_ID} && -z ${ITEMS_HASH[${LASTPASS_ITEM_ID}]+_} ]]; then
@@ -357,7 +398,9 @@ createFolder() {
     local FOLDER_ID
 
     FOLDER_NAME=$1
-    FOLDER_ID=$(printf '%s' "${TEMPLATES[FOLDER]}" | jq ".name = \"${FOLDER_NAME/"/\\"/}\"" | bw encode | bw create folder | jq --raw-output '.id')
+    FOLDER_ID=$(printf '%s' "${TEMPLATES[FOLDER]}" | jq \
+      --arg folderName "${FOLDER_NAME}" \
+      '.name = $folderName' | bw encode | bw create folder | jq --raw-output '.id')
 
     debug "Created folder '${FOLDER_NAME}' (ID: '${FOLDER_ID}')."
 
@@ -381,8 +424,6 @@ checkFolder() {
 
 getLastPassNoteFieldValue() {
     printf '%s' "$1" | grep "^$2:" | cut -d : -f 2- | trim
-
-    # TODO: escape quotes?
 }
 
 getLastPassItemType() {
@@ -474,6 +515,10 @@ upsertItem() {
 
     BITWARDEN_ITEM_JSON=$1
 
+    if [[ ${GLOBALS[DEBUG]} == 'true' ]]; then
+        printf 'upsertItem:\n\tBITWARDEN_ITEM_JSON = %s\n' "${BITWARDEN_ITEM_JSON}" > /dev/stderr
+    fi
+
     ENCODED_JSON=$(printf '%s' "${BITWARDEN_ITEM_JSON}" | bw encode)
 
     BITWARDEN_ITEM_ID=$(printf '%s' "${BITWARDEN_ITEM_JSON}" | jq --raw-output '.id // ""')
@@ -553,33 +598,41 @@ addField() {
     CUSTOM_FIELD_TYPE=${5:-0}       # default to zero
 
     NUM_FIELDS=$(printf '%s' "${BITWARDEN_ITEM_JSON}" | \
-      jq --raw-output ".fields[] | select( .name == \"${CUSTOM_FIELD_NAME}\" and .value == \"${CUSTOM_FIELD_VALUE}\" ) | length")
+      jq --raw-output \
+      --arg fieldName "${CUSTOM_FIELD_NAME}" \
+      --arg fieldValue "${CUSTOM_FIELD_VALUE}" \
+      '.fields[] | select( .name == $fieldName and .value == $fieldValue ) | length')
 
+    # add field if it does not already exist
     if [[ ${NUM_FIELDS} -eq 0 ]]; then
-        CUSTOM_FIELD=$(printf '%s' "${TEMPLATES[FIELD]}" | \
-        jq ".name = \"${CUSTOM_FIELD_NAME}\" | .value = \"${CUSTOM_FIELD_VALUE}\" | .type = ${CUSTOM_FIELD_TYPE}")
+        CUSTOM_FIELD=$(printf '%s' "${TEMPLATES[FIELD]}" |
+          jq \
+          --arg fieldName "${CUSTOM_FIELD_NAME}" \
+          --arg fieldValue "${CUSTOM_FIELD_VALUE}" \
+          --arg fieldType "${CUSTOM_FIELD_TYPE}" \
+          '.name = $fieldName | .value = $fieldValue | .type = ( $fieldType | tonumber )')
 
         JQ_FILTERS_REF+=(".fields += [${CUSTOM_FIELD}]")
     fi
 }
 
 processLastPassNoteFields() {
-    local LASTPASS_ITEM_NOTES
-    local -nA NOTE_FIELD_VALUES_REF
-    local FIELD
+    local -n LASTPASS_ITEM_NOTES_REF
+    local -n NOTE_FIELD_VALUES_REF
+    local _field
 
-    LASTPASS_ITEM_NOTES=$1
+    LASTPASS_ITEM_NOTES_REF=$1
     NOTE_FIELD_VALUES_REF=$2
 
-    for FIELD in "${NOTE_FIELDS[@]}"; do
+    for _field in "${NOTE_FIELDS[@]}"; do
         # TODO: Handle mutliple values with same field name.
 
-        NOTE_FIELD_VALUES_REF[${FIELD}]=$(getLastPassNoteFieldValue "${LASTPASS_ITEM_NOTES}" "${FIELD}")
+        NOTE_FIELD_VALUES_REF[${_field}]=$(getLastPassNoteFieldValue "${LASTPASS_ITEM_NOTES_REF}" "${_field}")
 
-        LASTPASS_ITEM_NOTES=$(removeLastPassItemNoteField "${LASTPASS_ITEM_NOTES}" "${FIELD}")
+        LASTPASS_ITEM_NOTES_REF=$(removeLastPassItemNoteField "${LASTPASS_ITEM_NOTES_REF}" "${_field}")
 
-        if [[ -z ${NOTE_FIELD_VALUES_REF[${FIELD}]} ]]; then
-            unset "NOTE_FIELD_VALUES_REF[${FIELD}]"
+        if [[ -z ${NOTE_FIELD_VALUES_REF[${_field}]} ]]; then
+             unset "NOTE_FIELD_VALUES_REF[${_field}]"
         fi
     done
 
@@ -588,8 +641,6 @@ processLastPassNoteFields() {
     if [[ ${GLOBALS[KEEP_LANGUAGE_CODE]} != 'true' ]]; then
         unset "NOTE_FIELD_VALUES_REF[Language]"
     fi
-
-    printf '%s' "${LASTPASS_ITEM_NOTES}"
 }
 
 processItem() {
@@ -617,6 +668,9 @@ processItem() {
 
     LASTPASS_ITEM_JSON=$1
 
+    debug "LASTPASS_ITEM_JSON = ${LASTPASS_ITEM_JSON}"
+
+    # make sure folder exists in Bitwarden vault
     checkFolder "${LASTPASS_ITEM_JSON}"
 
     LASTPASS_ITEM_ID=$(getLastPassItemProperty "${LASTPASS_ITEM_JSON}" '.id')
@@ -627,7 +681,18 @@ processItem() {
 
     LASTPASS_ITEM_NOTES=$(getLastPassItemProperty "${LASTPASS_ITEM_JSON}" '.note')
 
-    LASTPASS_ITEM_NOTES=$(processLastPassNoteFields "${LASTPASS_ITEM_NOTES}" NOTE_FIELD_VALUES)
+    if [[ -n ${LASTPASS_ITEM_NOTES} ]]; then
+        # store each note field value referenced in array into a hash
+        processLastPassNoteFields LASTPASS_ITEM_NOTES NOTE_FIELD_VALUES
+
+        if [[ ${GLOBALS[DEBUG]} == 'true' ]]; then
+            printf 'After calling processLastPassNoteFields (%s):\n' "${#NOTE_FIELD_VALUES[@]}" > /dev/stderr
+
+            for FIELD in "${!NOTE_FIELD_VALUES[@]}"; do
+                printf '\t%s = %s\n' "${FIELD}" "${NOTE_FIELD_VALUES[${FIELD}]}" > /dev/stderr
+            done
+        fi
+    fi
 
     case "${LASTPASS_ITEM_TYPE}" in
         'Address')
@@ -654,7 +719,7 @@ processItem() {
 
             for FIELD in "${!CARD_NOTE_FIELDS[@]}"; do
                 if [[ -n ${NOTE_FIELD_VALUES[${CARD_NOTE_FIELDS[${FIELD}]}]+_} ]]; then
-                    SUB_FILTERS+=(".${FIELD} = \"${NOTE_FIELD_VALUES[${CARD_NOTE_FIELDS[${FIELD}]}]/"/\\"/}\"")
+                    SUB_FILTERS+=(".${FIELD} = \"${NOTE_FIELD_VALUES[${CARD_NOTE_FIELDS[${FIELD}]}]//"/\\"}\"")
 
                     unset "NOTE_FIELD_VALUES[${CARD_NOTE_FIELDS[${FIELD}]}]"
                 else
@@ -699,8 +764,8 @@ processItem() {
             ITEM_USERNAME=$(getLastPassItemProperty "${LASTPASS_ITEM_JSON}" '.username')
             ITEM_PASSWORD=$(getLastPassItemProperty "${LASTPASS_ITEM_JSON}" '.password')
 
-            SUB_FILTERS+=(".username = \"${ITEM_USERNAME/"/\\"/}\"")
-            SUB_FILTERS+=(".password = \"${ITEM_PASSWORD/"/\\"/}\"")
+            SUB_FILTERS+=(".username = \"${ITEM_USERNAME//"/\\"}\"")
+            SUB_FILTERS+=(".password = \"${ITEM_PASSWORD//"/\\"}\"")
 
             ITEM_URL=$(getLastPassItemProperty "${LASTPASS_ITEM_JSON}" '.url' | filterDummyUrls)
 
@@ -720,10 +785,14 @@ processItem() {
 
         'Bank Account' | 'Insurance' | 'Membership' | 'Passport' | 'Social Security' | 'Health Insurance' | 'Secure Note')
             ITEM_TYPE_CODE=2    # Secure Note
+
+            JQ_FILTERS+=(".secureNote = ${TEMPLATES[NOTE]}")
             ;;
 
         *)
             ITEM_TYPE_CODE=2    # Secure Note
+
+            JQ_FILTERS+=(".secureNote = ${TEMPLATES[NOTE]}")
 
             debug "Unknown item type; treating as Secure Note."
             ;;
@@ -739,30 +808,34 @@ processItem() {
 
     ITEM_NAME=$(getLastPassItemProperty "${LASTPASS_ITEM_JSON}" '.name')
 
-    JQ_FILTERS+=(".name = \"${ITEM_NAME/"/\\"/}\"")
+    JQ_FILTERS+=('.name = $itemName')
 
-    LASTPASS_ITEM_NOTES=$(printf '%s' "${LASTPASS_ITEM_NOTES}" | sed -e 's/^Notes://' )
+    LASTPASS_ITEM_NOTES=$(printf '%s' "${LASTPASS_ITEM_NOTES}" | sed -e 's/^Notes://')
 
-    JQ_FILTERS+=(".notes = \"${LASTPASS_ITEM_NOTES/"/\\"/}\"")
+    if [[ -n ${LASTPASS_ITEM_NOTES} ]]; then
+        debug "LASTPASS_ITEM_NOTES = ${LASTPASS_ITEM_NOTES}"
+    fi
+
+    JQ_FILTERS+=('.notes = $notes')
 
     BITWARDEN_ITEM_JSON=$(getBitwardenItemJson "${LASTPASS_ITEM_ID}")
 
     # add remaining notes fields
     for FIELD in "${!NOTE_FIELD_VALUES[@]}"; do
-        addField JQ_FILTERS "${BITWARDEN_ITEM_JSON}" "${FIELD}" "${NOTE_FIELD_VALUES[${FIELD}]/"/\\"/}"
+        addField JQ_FILTERS "${BITWARDEN_ITEM_JSON}" "${FIELD}" "${NOTE_FIELD_VALUES[${FIELD}]//"/\\"}"
     done
 
     addField JQ_FILTERS "${BITWARDEN_ITEM_JSON}" "${LASTPASS_ID_FIELD_NAME}" "${LASTPASS_ITEM_ID}"
 
     JQ_FILTERS_STRING=$(joinArray ' | ' "${JQ_FILTERS[@]}")
 
-    BITWARDEN_ITEM_JSON=$(printf '%s' "${BITWARDEN_ITEM_JSON}" | \
-      jq "${JQ_FILTERS_STRING}")
+    BITWARDEN_ITEM_JSON=$(printf '%s' "${BITWARDEN_ITEM_JSON}" | jq \
+      --arg itemName "${ITEM_NAME}" \
+      --arg notes "${LASTPASS_ITEM_NOTES}" \
+       "${JQ_FILTERS_STRING}")
 
     # TODO: if [[ changes ]]; then
     debug "Upserting item (ID: '${LASTPASS_ITEM_ID}')."
-
-    debug "BITWARDEN_ITEM_JSON = ${BITWARDEN_ITEM_JSON}"
 
     BITWARDEN_ITEM_ID=$(upsertItem "${BITWARDEN_ITEM_JSON}")
 

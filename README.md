@@ -51,9 +51,6 @@ above.
 
 - [ ] Allow organization per folder.
 - [ ] Handle attachments.
-- [x] Dry run mode.
 - [ ] Trim passwords, usernames, entry names, etc.?
-- [x] Ignore dummy or invalid URLs (<https://>)
 - [ ] Process: "Start Date", "Expiration", "Expiration Date"?
 - [ ] Handle multiple notes values with same key.
-- [x] Upsert.
