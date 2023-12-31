@@ -316,6 +316,7 @@ dependency_check() {
         'jq'
         'realpath'
         'sed'
+        'stat'
         'tr'
         'xargs'
     )

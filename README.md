@@ -43,6 +43,7 @@ $ load.sh -d -p passphrase.txt /tmp/lpass
 - `mktemp` - pre-installed with macOS and most Linux distributions.
 - `realpath` - install via coreutils using [Homebrew](https://formulae.brew.sh/formula/coreutils), another package manager, or [manually](https://www.gnu.org/software/coreutils/).
 - `sed` - pre-installed with macOS and most Linux distributions.
+- `stat` - pre-installed with macOS and most Linux distributions.
 - `tr` - pre-installed with macOS and most Linux distributions.
 - `xargs` - pre-installed with macOS and most Linux distributions.
 
