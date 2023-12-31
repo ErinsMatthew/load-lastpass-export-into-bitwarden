@@ -37,13 +37,13 @@ $ load.sh -d -p passphrase.txt /tmp/lpass
 - `echo` - pre-installed with macOS and most Linux distributions.
 - `find` - pre-installed with macOS and most Linux distributions.
 - `gdate` - install via coreutils using [Homebrew](https://formulae.brew.sh/formula/coreutils), another package manager, or [manually](https://www.gnu.org/software/coreutils/).
+- `gstat` - install via coreutils using [Homebrew](https://formulae.brew.sh/formula/coreutils), another package manager, or [manually](https://www.gnu.org/software/coreutils/).
 - `gpg` - optional; GNU Privacy Guard; install using [Homebrew](https://formulae.brew.sh/formula/gnupg), another package manager, or [manually](https://gnupg.org/).
 - `grep` - pre-installed with macOS and most Linux distributions.
 - `jq` - install using [Homebrew](https://formulae.brew.sh/formula/jq), another package manager, or [manually](https://stedolan.github.io/jq/).
 - `mktemp` - pre-installed with macOS and most Linux distributions.
 - `realpath` - install via coreutils using [Homebrew](https://formulae.brew.sh/formula/coreutils), another package manager, or [manually](https://www.gnu.org/software/coreutils/).
 - `sed` - pre-installed with macOS and most Linux distributions.
-- `stat` - pre-installed with macOS and most Linux distributions.
 - `tr` - pre-installed with macOS and most Linux distributions.
 - `xargs` - pre-installed with macOS and most Linux distributions.
 

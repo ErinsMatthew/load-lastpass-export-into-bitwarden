@@ -313,10 +313,10 @@ dependency_check() {
         'find'
         'gdate'
         'grep'
+        'gstat'
         'jq'
         'realpath'
         'sed'
-        'stat'
         'tr'
         'xargs'
     )
@@ -589,7 +589,7 @@ get_lastpass_attachment_size() {
 
     decrypt_data "${file_name}" > "${temp_file}"
 
-    stat --printf="%s" "${temp_file}"
+    gstat --printf="%s" "${temp_file}"
 
     rm -f "${temp_file}"
 }
