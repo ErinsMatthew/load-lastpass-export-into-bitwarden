@@ -15,6 +15,11 @@ To execute this script, run the following commands once the
 dependencies are installed:
 
 ```sh
+# login, unlock, and sync Bitwarden vault
+$ bw login
+$ export BW_SESSION
+$ bw sync
+
 # list possible options and help
 $ load.sh -h
 
@@ -46,6 +51,10 @@ $ load.sh -d -p passphrase.txt /tmp/lpass
 This script was tested on macOS Monterey (12.6) using GNU Bash 5.2.15,
 but should work on any GNU/Linux system that supports the dependencies
 above.
+
+## Style Guide
+
+This script follows the [Shell Style Guide](https://google.github.io/styleguide/shellguide.html).
 
 ## Enhancements
 
