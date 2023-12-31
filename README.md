@@ -42,6 +42,7 @@ $ load.sh -d -p passphrase.txt /tmp/lpass
 - `gstat` - install via coreutils using [Homebrew](https://formulae.brew.sh/formula/coreutils), another package manager, or [manually](https://www.gnu.org/software/coreutils/).
 - `jq` - install using [Homebrew](https://formulae.brew.sh/formula/jq), another package manager, or [manually](https://stedolan.github.io/jq/).
 - `mktemp` - pre-installed with macOS and most Linux distributions.
+- `openssl` - optional; OpenSSL; older version pre-installed with macOS and most Linux distributions; install newer version using [Homebrew](https://formulae.brew.sh/formula/openssl@3), another package manager, or [manually](https://www.openssl.org/source/)
 - `realpath` - install via coreutils using [Homebrew](https://formulae.brew.sh/formula/coreutils), another package manager, or [manually](https://www.gnu.org/software/coreutils/).
 - `sed` - pre-installed with macOS and most Linux distributions.
 - `tr` - pre-installed with macOS and most Linux distributions.
