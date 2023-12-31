@@ -52,6 +52,7 @@ init_globals() {
         [ENCRYPTED_EXTENSION]=''                # -x
         [INPUT_DIR]=''                          # dir
         [KEEP_LANGUAGE_CODE]='false'            # -l
+        [MAX_NOTES_LENGTH]=7500                 # Bitwarden has maximum notes length.
         [ORGANIZATION_ID]=''                    # -o
         [PASSPHRASE_FILE]=''                    # -p
         [TEMP_DIR]=$(mktemp -d)
@@ -69,9 +70,13 @@ init_globals() {
         'Account Number'
         'Account Type'
         'Address'
+        'Address 1'
+        'Address 2'
+        'Address 3'
         'Agent Name'
         'Agent Phone'
         'Bank Name'
+        'Birthday'
         'Branch Address'
         'Branch Phone'
         'City / Town'
@@ -79,12 +84,18 @@ init_globals() {
         'Color'
         'Company Phone'
         'Company'
+        'County'
         'Country'
         'DOB'
         'Date of Birth'
+        'Email Address'
+        'Evening Phone'
         'Expiration Date'
         'Expiration'
         'Expires'
+        'Fax'
+        'First Name'
+        'Gender'
         'Group ID'
         'Height'
         'IBAN Number'
@@ -93,6 +104,7 @@ init_globals() {
         'Issued'
         'Issuing Authority'
         'Keyword'
+        'Last Name'
         'Language'
         'License Class'
         'MAC'
@@ -101,6 +113,8 @@ init_globals() {
         'Member Name'
         'Membership #'
         'Membership Number'
+        'Middle Name'
+        'Mobile Phone'
         'Model'
         'Name on Card'
         'Name'
@@ -110,6 +124,7 @@ init_globals() {
         'Organization'
         'PIN'
         'Password'
+        'Phone'
         'Physician Address'
         'Physician Name'
         'Physician Phone'
@@ -135,11 +150,14 @@ init_globals() {
         'Start Date'
         'State'
         'Telephone'
+        'Timezone'
+        'Title'
         'Type'
         'URL'
         'Username'
         'Website'
-        'ZIP / Postal Code'
+        'Zip / Postal Code'
+        'ZIP / Postal Code'     # LastPass has two capitalizations
     )
 }
 
@@ -373,9 +391,9 @@ load_templates() {
     TEMPLATES[CARD]=$(bw get template item.card)
     TEMPLATES[FIELD]=$(bw get template item.field)
     TEMPLATES[FOLDER]=$(bw get template folder)
-    TEMPLATES[IDENTITY]=$(bw get template item.identity)
+    TEMPLATES[IDENTITY]=$(bw get template item.identity | jq --compact-output '.title = null | .firstName = null | .middleName = null | .lastName = null | .address1 = null | .address2 = null | .city = null | .state = null | .postalCode = null | .country = null | .company = null | .email = null | .phone = null | .ssn = null | .username = null | .passportNumber = null | .licenseNumber = null')
     TEMPLATES[ITEM]=$(bw get template item)
-    TEMPLATES[LOGIN]=$(bw get template item.login | jq '.fido2Credentials = null' | jq '.totp = null')
+    TEMPLATES[LOGIN]=$(bw get template item.login | jq --compact-output '.fido2Credentials = null | .totp = null')
     TEMPLATES[NOTE]=$(bw get template item.secureNote)
     TEMPLATES[URI]=$(bw get template item.login.uri)
 }
@@ -477,6 +495,8 @@ get_lastpass_item_type() {
         fi
 
         echo "${lastpass_item_type}"
+    elif [[ ${item_url} == 'http://group' ]]; then
+        echo 'Group'
     else
         echo 'Password'
     fi
@@ -524,6 +544,10 @@ bitwarden_edit_or_create() {
 
     bitwarden_item_id=${2:-0}
 
+    if [[ ${GLOBALS[DEBUG]} == 'true' ]]; then
+        printf 'bitwarden_edit_or_create (%s):\n\tbitwarden_item_id = %s\n' "$1" "${bitwarden_item_id}" > /dev/stderr
+    fi
+
     if [[ ${GLOBALS[DRY_RUN]} == 'true' ]]; then
         if [[ $1 == 'edit' ]]; then
             printf '{ "id": "%s" }' "${bitwarden_item_id}"
@@ -562,6 +586,10 @@ upsert_item() {
         edit_or_create='create'
     fi
 
+    if [[ ${GLOBALS[DEBUG]} == 'true' ]]; then
+        printf 'upsert_item (before):\n\tbitwarden_item_id = %s\n\tedit_or_create = %s\n' "${bitwarden_item_id}" "${edit_or_create}" > /dev/stderr
+    fi
+
     readonly edit_or_create
 
     printf '%s' "${bitwarden_item_json}" | \
@@ -594,28 +622,83 @@ get_lastpass_attachment_size() {
     rm -f "${temp_file}"
 }
 
+create_temp_file() {
+    local from
+    local file_name_or_data
+    local temp_file
+
+    from=$1
+    file_name_or_data=$2
+
+    readonly from
+    readonly file_name_or_data
+
+    temp_file=$(get_attachment_temp_file_name "${file_name_or_data}")
+
+    case "${from}" in
+        file)
+            decrypt_data "${file_name_or_data}" > "${temp_file}"
+            ;;
+
+        data)
+            printf '%s' "${file_name_or_data}" > "${temp_file}"
+            ;;
+
+        *)
+            echo "Invalid from: ${from}" > /dev/stderr
+
+            return
+            ;;
+    esac
+
+    printf '%s' "${temp_file}"
+}
+
 create_or_update_attachment() {
     local operation
-    local file_name
+    local from
+    local file_name_or_data
     local bitwarden_item_id
     local bitwarden_attachment_id
+
     local temp_file
 
     operation=$1
-    file_name=$2
-    bitwarden_item_id=$3
-    bitwarden_attachment_id=${4:-}
+    from=$2
+    file_name_or_data=$3
+    bitwarden_item_id=$4
+    bitwarden_attachment_id=${5:-}
 
     readonly operation
-    readonly file_name
+    readonly from
+    readonly file_name_or_data
     readonly bitwarden_item_id
     readonly bitwarden_attachment_id
 
-    temp_file=$(get_attachment_temp_file_name "${file_name}")
+    if [[ ${GLOBALS[DEBUG]} == 'true' ]]; then
+        printf 'create_or_update_attachment:\n\toperation = %s\n\tfrom = %s\n\tbitwarden_item_id = %s\n\tbitwarden_attachment_id = %s\n' \
+            "${operation}" \
+            "${from}" \
+            "${bitwarden_item_id}" \
+            "${bitwarden_attachment_id}" \
+            > /dev/stderr
+    fi
+
+    if [[ ${GLOBALS[DRY_RUN]} == 'true' ]]; then
+        debug "Not creating or updating attachment due to dry run mode being active."
+
+        return
+    fi
+
+    if [[ ${from} != 'file' && ${from} != 'data' ]]; then
+        echo "Invalid from: ${from}" > /dev/stderr
+
+        return
+    fi
 
     case "${operation}" in
         create)
-            decrypt_data "${file_name}" > "${temp_file}"
+            temp_file=$(create_temp_file "${from}" "${file_name_or_data}")
 
             bw create attachment --file "${temp_file}" --itemid "${bitwarden_item_id}"
 
@@ -623,7 +706,7 @@ create_or_update_attachment() {
             ;;
 
         update)
-            decrypt_data "${file_name}" > "${temp_file}"
+            temp_file=$(create_temp_file "${from}" "${file_name_or_data}")
 
             bw delete attachment "${bitwarden_attachment_id}"
 
@@ -634,6 +717,8 @@ create_or_update_attachment() {
 
         *)
             echo "Invalid operation: ${operation}" > /dev/stderr
+
+            return
             ;;
     esac
 }
@@ -694,10 +779,10 @@ process_attachments() {
                           jq --raw-output \
                           '.id')
 
-                        create_or_update_attachment 'update' "${lastpass_attachment_file}" "${bitwarden_item_id}" "${bitwarden_attachment_id}"
+                        create_or_update_attachment 'update' 'file' "${lastpass_attachment_file}" "${bitwarden_item_id}" "${bitwarden_attachment_id}"
                     fi
                 else
-                    create_or_update_attachment 'create' "${lastpass_attachment_file}" "${bitwarden_item_id}"
+                    create_or_update_attachment 'create' 'file' "${lastpass_attachment_file}" "${bitwarden_item_id}"
                 fi
             done
         fi
@@ -795,12 +880,15 @@ process_item() {
     local expiration_month_name
     local bitwarden_item_json
     local bitwarden_item_id
+    local folder_id
 
     local -A note_field_values=()
     local -a sub_filters=()
     local -a jq_filters=()
 
     lastpass_item_json=$1
+
+    readonly lastpass_item_json
 
     debug "lastpass_item_json = ${lastpass_item_json}"
 
@@ -810,6 +898,15 @@ process_item() {
     lastpass_item_id=$(get_lastpass_item_property "${lastpass_item_json}" 'ID')
 
     lastpass_item_type=$(get_lastpass_item_type "${lastpass_item_json}")
+
+    readonly lastpass_item_id
+    readonly lastpass_item_type
+
+    if [[ ${lastpass_item_type} == 'Group' ]]; then
+        debug "Skipping item (ID: '${lastpass_item_id}') of type '${lastpass_item_type}'."
+
+        return
+    fi
 
     debug "Processing item (ID: '${lastpass_item_id}') of type '${lastpass_item_type}'."
 
@@ -831,15 +928,79 @@ process_item() {
     case "${lastpass_item_type}" in
         'Address')
             item_type_code=4    # Identity
+
+            sub_filters=()
+
+            local -A identity_note_fields
+
+            identity_note_fields=(
+                [title]='Title'
+                [firstName]='First Name'
+                [middleName]='Middle Name'
+                [lastName]='Last Name'
+                [address1]='Address 1'
+                [address2]='Address 2'
+                [address3]='Address 3'
+                [city]='City / Town'
+                [state]='State'
+                [postalCode]='Zip / Postal Code'
+                [country]='Country'
+                [company]='Company'
+                [email]='Email Address'
+                [phone]='Title'
+                [username]='Username'
+            )
+
+            for field in "${!identity_note_fields[@]}"; do
+                if [[ -n ${note_field_values[${identity_note_fields[${field}]}]+_} ]]; then
+                    sub_filters+=(".${field} = \"${note_field_values[${identity_note_fields[${field}]}]//"/\\"}\"")
+
+                    unset "note_field_values[${identity_note_fields[${field}]}]"
+                else
+                    sub_filters+=(".${field} = null")
+                fi
+            done
+
+            unset 'identity_note_fields'
+
+            sub_filters_string=$(join_array ' | ' "${sub_filters[@]}")
+
+            jq_filters+=(".identity = $(printf '%s' "${TEMPLATES[IDENTITY]}" | \
+              jq "${sub_filters_string}")")
             ;;
 
         "Driver's License")
             item_type_code=4    # Identity
 
-            # NoteType:Driver's License\nNumber:\nExpiration Date:,,\nLicense Class:\nName:\nAddress:\nCity / Town:\nState:\nZIP / Postal Code:\nCountry:\nDate of Birth:\nSex:\nHeight:\nNotes:Server
+            sub_filters=()
 
-            # .title = null
-            # .
+            local -A license_note_fields
+
+            license_note_fields=(
+                [address1]='Address'
+                [city]='City / Town'
+                [state]='State'
+                [postalCode]='ZIP / Postal Code'
+                [country]='Country'
+                [licenseNumber]='Number'
+            )
+
+            for field in "${!license_note_fields[@]}"; do
+                if [[ -n ${note_field_values[${license_note_fields[${field}]}]+_} ]]; then
+                    sub_filters+=(".${field} = \"${note_field_values[${license_note_fields[${field}]}]//"/\\"}\"")
+
+                    unset "note_field_values[${license_note_fields[${field}]}]"
+                else
+                    sub_filters+=(".${field} = null")
+                fi
+            done
+
+            unset 'license_note_fields'
+
+            sub_filters_string=$(join_array ' | ' "${sub_filters[@]}")
+
+            jq_filters+=(".identity = $(printf '%s' "${TEMPLATES[IDENTITY]}" | \
+              jq "${sub_filters_string}")")
             ;;
 
         'Credit Card')
@@ -934,12 +1095,19 @@ process_item() {
 
     item_folder_name=$(get_lastpass_item_property "${lastpass_item_json}" 'GROUP')
 
-    if [[ -n ${item_folder_name} ]]; then
+    if [[ -z ${FOLDERS_HASH[${item_folder_name}]+_} ]]; then
+        folder_id=''
+
+        jq_filters+=('.folderId = null')
+    else
+        folder_id=${FOLDERS_HASH[${item_folder_name}]}
+
         # shellcheck disable=SC2016
         jq_filters+=('.folderId = $folder_id')
     fi
 
-    jq_filters+=(".type = ${item_type_code}")
+    # shellcheck disable=SC2016
+    jq_filters+=('.type = ( $item_type_code | tonumber )')
 
     item_name=$(get_lastpass_item_property "${lastpass_item_json}" 'NAME')
 
@@ -955,6 +1123,16 @@ process_item() {
     # shellcheck disable=SC2016
     jq_filters+=('.notes = $notes')
 
+    local long_lastpass_item_notes
+
+    if [[ ${#lastpass_item_notes} -ge ${GLOBALS[MAX_NOTES_LENGTH]} ]]; then
+        long_lastpass_item_notes=${lastpass_item_notes}
+
+        readonly long_lastpass_item_notes
+
+        lastpass_item_notes=''
+    fi
+
     bitwarden_item_json=$(get_bitwarden_item_json "${lastpass_item_id}")
 
     # add remaining notes fields
@@ -968,7 +1146,8 @@ process_item() {
 
     bitwarden_item_json=$(printf '%s' "${bitwarden_item_json}" | jq \
       --arg item_name "${item_name}" \
-      --arg folder_id "${FOLDERS_HASH[${item_folder_name}]+null}" \
+      --arg item_type_code "${item_type_code}" \
+      --arg folder_id "${folder_id}" \
       --arg notes "${lastpass_item_notes}" \
        "${jq_filters_string}")
 
@@ -979,6 +1158,10 @@ process_item() {
     debug "bitwarden_item_id = ${bitwarden_item_id}"
 
     if [[ -n ${bitwarden_item_id} ]]; then
+        if [[ ${#lastpass_item_notes} -ge ${GLOBALS[MAX_NOTES_LENGTH]} ]]; then
+            create_or_update_attachment 'create' 'data' "${long_lastpass_item_notes}" "${bitwarden_item_id}"
+        fi
+
         process_attachments "${lastpass_item_id}" "${bitwarden_item_id}" "${bitwarden_item_json}"
     fi
 }
