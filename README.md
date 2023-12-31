@@ -60,7 +60,6 @@ This script follows the [Shell Style Guide](https://google.github.io/styleguide/
 ## Enhancements
 
 - [ ] Allow organization per folder.
-- [ ] Handle attachments.
 - [ ] Trim passwords, usernames, entry names, etc.?
 - [ ] Process: "Start Date", "Expiration", "Expiration Date"?
 - [ ] Handle multiple notes values with same key.
