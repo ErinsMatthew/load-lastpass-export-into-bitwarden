@@ -66,6 +66,8 @@ init_globals() {
 
     declare -gr BW_LASTPASS_ID_FIELD_NAME='lastpass_id'
 
+    declare -gr LONG_NOTES_FILE_NAME='LongNotes.txt'
+
     declare -agr NOTE_FIELDS=(
         'Account Number'
         'Account Type'
@@ -597,34 +599,69 @@ upsert_item() {
       jq --raw-output '.id // ""'
 }
 
+remove_encrypted_extension() {
+    sed -e "s/\.${GLOBALS[ENCRYPTED_EXTENSION]}$//"
+}
+
 get_attachment_temp_file_name() {
+    local from
+    local file_name
+
     local temp_file
 
-    temp_file=${GLOBALS[TEMP_DIR]}/$(basename "${file_name}" | sed -e "s/\.${GLOBALS[ENCRYPTED_EXTENSION]}$//")
+    from=$1
+    file_name=$2
+
+    readonly from
+    readonly file_name
+
+    case "${from}" in
+        file)
+            temp_file=${GLOBALS[TEMP_DIR]}/$(basename "${file_name}" | remove_encrypted_extension)
+            ;;
+
+        data)
+            temp_file=${GLOBALS[TEMP_DIR]}/${LONG_NOTES_FILE_NAME}
+            ;;
+
+        *)
+            echo "Invalid from: ${from}" > /dev/stderr
+
+            return
+            ;;
+    esac
 
     printf '%s' "${temp_file}"
 }
 
 get_lastpass_attachment_size() {
     local file_name
+
     local temp_file
 
     file_name=$1
 
     readonly file_name
 
-    temp_file=$(get_attachment_temp_file_name "${file_name}")
+    temp_file=$(get_attachment_temp_file_name 'file' "${file_name}")
 
-    decrypt_data "${file_name}" > "${temp_file}"
+    if [[ -n ${temp_file} ]]; then
+        decrypt_data "${file_name}" > "${temp_file}"
 
-    gstat --printf="%s" "${temp_file}"
+        gstat --printf="%s" "${temp_file}"
 
-    rm -f "${temp_file}"
+        rm -f "${temp_file}"
+    else
+        printf '%d' -1
+
+        return
+    fi
 }
 
 create_temp_file() {
     local from
     local file_name_or_data
+
     local temp_file
 
     from=$1
@@ -633,7 +670,15 @@ create_temp_file() {
     readonly from
     readonly file_name_or_data
 
-    temp_file=$(get_attachment_temp_file_name "${file_name_or_data}")
+    temp_file=$(get_attachment_temp_file_name "${from}" "${file_name_or_data}")
+
+    if [[ -z ${temp_file} ]]; then
+        echo "Unable to get temp file." > /dev/stderr
+
+        printf ''
+
+        return
+    fi
 
     case "${from}" in
         file)
@@ -700,19 +745,29 @@ create_or_update_attachment() {
         create)
             temp_file=$(create_temp_file "${from}" "${file_name_or_data}")
 
-            bw create attachment --file "${temp_file}" --itemid "${bitwarden_item_id}"
+            if [[ -n ${temp_file} ]]; then
+                bw create attachment --file "${temp_file}" --itemid "${bitwarden_item_id}"
 
-            rm -f "${temp_file}"
+                rm -f "${temp_file}"
+            else
+                return
+            fi
             ;;
 
         update)
             temp_file=$(create_temp_file "${from}" "${file_name_or_data}")
 
-            bw delete attachment "${bitwarden_attachment_id}"
+            if [[ -n ${temp_file} ]]; then
+                bw delete attachment "${bitwarden_attachment_id}" --itemid "${bitwarden_item_id}"
 
-            bw create attachment --file "${temp_file}" --itemid "${bitwarden_item_id}"
+                debug "Deleted existing attachment '${bitwarden_attachment_id}'."
 
-            rm -f "${temp_file}"
+                bw create attachment --file "${temp_file}" --itemid "${bitwarden_item_id}" > /dev/null
+
+                rm -f "${temp_file}"
+            else
+                return
+            fi
             ;;
 
         *)
@@ -736,6 +791,7 @@ process_attachments() {
         local lastpass_attachments_list
         local -i num_lastpass_attachments
         local lastpass_attachment_file
+        local lastpass_attachment_file_name
         local bitwarden_attachment_json
 
         bitwarden_item_id=$2
@@ -757,9 +813,11 @@ process_attachments() {
             for lastpass_attachment_file in "${lastpass_attachments_list[@]}"; do
                 debug "Processing attachment '${lastpass_attachment_file}'."
 
+                lastpass_attachment_file_name=$(basename "${lastpass_attachment_file}" | remove_encrypted_extension)
+
                 bitwarden_attachment_json=$(printf '%s' "${bitwarden_item_json}" | \
                   jq --raw-output \
-                  --arg attachment_name "${lastpass_attachment_file}" \
+                  --arg attachment_name "${lastpass_attachment_file_name}" \
                   '.attachments[]? | select( .fileName == $attachment_name )')
 
                 if [[ -n ${bitwarden_attachment_json} ]]; then
@@ -875,7 +933,6 @@ process_item() {
     local item_username
     local item_password
     local uris
-    local login
     local expiration_date
     local expiration_month_name
     local bitwarden_item_json
@@ -961,7 +1018,7 @@ process_item() {
                 fi
             done
 
-            unset 'identity_note_fields'
+            unset identity_note_fields
 
             sub_filters_string=$(join_array ' | ' "${sub_filters[@]}")
 
@@ -995,7 +1052,7 @@ process_item() {
                 fi
             done
 
-            unset 'license_note_fields'
+            unset license_note_fields
 
             sub_filters_string=$(join_array ' | ' "${sub_filters[@]}")
 
@@ -1022,7 +1079,7 @@ process_item() {
                 fi
             done
 
-            unset 'card_note_fields'
+            unset card_note_fields
 
             if [[ -n ${note_field_values[Expiration Date]+_} ]]; then
                 expiration_date=${note_field_values[Expiration Date]}
@@ -1051,59 +1108,51 @@ process_item() {
               jq "${sub_filters_string}")")
             ;;
 
-        'Email Account' | 'Password')
-            item_type_code=1    # Login
-
-            sub_filters=()
-
+        *)
             item_username=$(get_lastpass_item_property "${lastpass_item_json}" 'USERNAME')
             item_password=$(get_lastpass_item_property "${lastpass_item_json}" 'PASSWORD')
 
-            sub_filters+=(".username = \"${item_username//"/\\"}\"")
-            sub_filters+=(".password = \"${item_password//"/\\"}\"")
+            if [[ -n ${item_username} || -n ${item_password} ]]; then
+                debug "Item has a username or password, so treating like a login."
 
-            item_url=$(get_lastpass_item_property "${lastpass_item_json}" 'URL' | filter_dummy_urls)
+                item_type_code=1    # Login
 
-            if [[ -n ${item_url} ]]; then
-                uris=$(printf '%s' "${TEMPLATES[URI]}" | jq ".uri = \"${item_url}\"")
+                sub_filters=()
 
-                sub_filters+=(".uris += [${uris}]")
+                sub_filters+=(".username = \"${item_username//"/\\"}\"")
+                sub_filters+=(".password = \"${item_password//"/\\"}\"")
+
+                item_url=$(get_lastpass_item_property "${lastpass_item_json}" 'URL' | filter_dummy_urls)
+
+                if [[ -n ${item_url} ]]; then
+                    uris=$(printf '%s' "${TEMPLATES[URI]}" | jq ".uri = \"${item_url}\"")
+
+                    sub_filters+=(".uris += [${uris}]")
+                fi
+
+                sub_filters_string=$(join_array ' | ' "${sub_filters[@]}")
+
+                jq_filters+=(".login = $(printf '%s' "${TEMPLATES[LOGIN]}" | \
+                  jq "${sub_filters_string}")")
+            else
+                debug "Item does not have a username or password, so treating like a secure note."
+
+                item_type_code=2    # Secure Note
+
+                jq_filters+=(".secureNote = ${TEMPLATES[NOTE]}")
             fi
-
-            sub_filters_string=$(join_array ' | ' "${sub_filters[@]}")
-
-            login=$(printf '%s' "${TEMPLATES[LOGIN]}" | \
-              jq "${sub_filters_string}")
-
-            jq_filters+=(".login = ${login}")
-            ;;
-
-        'Bank Account' | 'Insurance' | 'Membership' | 'Passport' | 'Social Security' | 'Health Insurance' | 'Secure Note')
-            item_type_code=2    # Secure Note
-
-            jq_filters+=(".secureNote = ${TEMPLATES[NOTE]}")
-            ;;
-
-        *)
-            item_type_code=2    # Secure Note
-
-            jq_filters+=(".secureNote = ${TEMPLATES[NOTE]}")
-
-            debug "Unknown item type; treating as Secure Note."
             ;;
     esac
 
     item_folder_name=$(get_lastpass_item_property "${lastpass_item_json}" 'GROUP')
 
-    if [[ -z ${FOLDERS_HASH[${item_folder_name}]+_} ]]; then
-        folder_id=''
-
-        jq_filters+=('.folderId = null')
-    else
+    if [[ -n ${item_folder_name} && -n ${FOLDERS_HASH[${item_folder_name}]+_} ]]; then
         folder_id=${FOLDERS_HASH[${item_folder_name}]}
 
         # shellcheck disable=SC2016
         jq_filters+=('.folderId = $folder_id')
+    else
+        folder_id=''
     fi
 
     # shellcheck disable=SC2016
@@ -1128,10 +1177,12 @@ process_item() {
     if [[ ${#lastpass_item_notes} -ge ${GLOBALS[MAX_NOTES_LENGTH]} ]]; then
         long_lastpass_item_notes=${lastpass_item_notes}
 
-        readonly long_lastpass_item_notes
-
         lastpass_item_notes=''
+    else
+        long_lastpass_item_notes=''
     fi
+
+    readonly long_lastpass_item_notes
 
     bitwarden_item_json=$(get_bitwarden_item_json "${lastpass_item_id}")
 
@@ -1158,7 +1209,7 @@ process_item() {
     debug "bitwarden_item_id = ${bitwarden_item_id}"
 
     if [[ -n ${bitwarden_item_id} ]]; then
-        if [[ ${#lastpass_item_notes} -ge ${GLOBALS[MAX_NOTES_LENGTH]} ]]; then
+        if [[ -n ${long_lastpass_item_notes} ]]; then
             create_or_update_attachment 'create' 'data' "${long_lastpass_item_notes}" "${bitwarden_item_id}"
         fi
 
