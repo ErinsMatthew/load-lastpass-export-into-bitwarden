@@ -746,7 +746,7 @@ create_or_update_attachment() {
             temp_file=$(create_temp_file "${from}" "${file_name_or_data}")
 
             if [[ -n ${temp_file} ]]; then
-                bw create attachment --file "${temp_file}" --itemid "${bitwarden_item_id}"
+                bw create attachment --file "${temp_file}" --itemid "${bitwarden_item_id}" > /dev/stderr
 
                 rm -f "${temp_file}"
             else
@@ -758,11 +758,11 @@ create_or_update_attachment() {
             temp_file=$(create_temp_file "${from}" "${file_name_or_data}")
 
             if [[ -n ${temp_file} ]]; then
-                bw delete attachment "${bitwarden_attachment_id}" --itemid "${bitwarden_item_id}"
+                bw delete attachment "${bitwarden_attachment_id}" --itemid "${bitwarden_item_id}" > /dev/stderr
 
                 debug "Deleted existing attachment '${bitwarden_attachment_id}'."
 
-                bw create attachment --file "${temp_file}" --itemid "${bitwarden_item_id}" > /dev/null
+                bw create attachment --file "${temp_file}" --itemid "${bitwarden_item_id}" > /dev/stderr
 
                 rm -f "${temp_file}"
             else
@@ -829,6 +829,8 @@ process_attachments() {
                       '.size')
 
                     lastpass_attachment_size=$(get_lastpass_attachment_size "${lastpass_attachment_file}")
+
+                    debug "process_attachments\n\tbitwarden_attachment_size = ${bitwarden_attachment_size}\n\tlastpass_attachment_size = ${lastpass_attachment_size}"
 
                     if [[ "${bitwarden_attachment_size}" != "${lastpass_attachment_size}" ]]; then
                         local bitwarden_attachment_id
